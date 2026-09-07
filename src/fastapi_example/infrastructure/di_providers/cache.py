@@ -1,3 +1,5 @@
+from collections.abc import AsyncIterator
+
 import redis.asyncio as aioredis
 from dishka import Provider, Scope, provide
 
@@ -15,8 +17,12 @@ class CacheProvider(Provider):
         self._cache_settings = cache_settings
 
     @provide(scope=Scope.APP)
-    def client(self) -> aioredis.Redis:
-        return create_client(self._cache_settings.url)
+    async def client(self) -> AsyncIterator[aioredis.Redis]:
+        client = create_client(self._cache_settings.url)
+        try:
+            yield client
+        finally:
+            await client.aclose()
 
 
 class CacheRepositoriesProvider(Provider):

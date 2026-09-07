@@ -1,13 +1,18 @@
+from typing import Annotated
 from uuid import uuid4
 
 import jwt
 import pytest
+from fastapi import FastAPI, Security
+from fastapi.testclient import TestClient
 
 from fastapi_example.application.exceptions.http_exceptions import (
     UnAuthorizedError,
 )
 from fastapi_example.application.services.token_jwt import TokenJWTService
 from fastapi_example.infrastructure.settings import JWTSettings
+from fastapi_example.presentation.api.common.handlers import setup_exception_handlers
+from fastapi_example.presentation.api.v1.dependencies import get_bearer_token
 
 
 class TestTokenJWTService:
@@ -91,11 +96,43 @@ class TestTokenJWTService:
         with pytest.raises(UnAuthorizedError):
             token_service.get_user_id_from_token("invalid.token.here")
 
-    def test_get_user_id_from_token_invalid_uuid_format(
-        self, token_service: TokenJWTService
+    @pytest.mark.parametrize(
+        ("subject", "expected_message"),
+        [
+            ("not-a-uuid", "Invalid token subject"),
+            ("", "Token missing subject"),
+            ("12345", "Invalid token subject"),
+        ],
+    )
+    def test_get_user_id_from_token_rejects_invalid_subject(
+        self,
+        token_service: TokenJWTService,
+        subject: str,
+        expected_message: str,
     ):
-        payload = {"sub": "not-a-uuid"}
+        payload = {"sub": subject}
         token = token_service.create_access_token(payload)
 
-        with pytest.raises(UnAuthorizedError, match="Invalid token subject"):
+        with pytest.raises(UnAuthorizedError, match=expected_message):
             token_service.get_user_id_from_token(token)
+
+    @pytest.mark.parametrize("subject", ["not-a-uuid", "", "12345"])
+    def test_bearer_token_with_invalid_subject_returns_unauthorized(
+        self, token_service: TokenJWTService, subject: str
+    ):
+        app = FastAPI()
+        setup_exception_handlers(app)
+
+        @app.get("/protected")
+        async def protected(
+            token: Annotated[str, Security(get_bearer_token)],
+        ) -> dict[str, str]:
+            user_id = token_service.get_user_id_from_token(token)
+            return {"user_id": str(user_id)}
+
+        token = token_service.create_access_token({"sub": subject})
+        response = TestClient(app).get(
+            "/protected", headers={"Authorization": f"Bearer {token}"}
+        )
+
+        assert response.status_code == 401

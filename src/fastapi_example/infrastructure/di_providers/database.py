@@ -1,4 +1,4 @@
-from typing import AsyncIterator
+from collections.abc import AsyncIterator
 
 from dishka import Provider, Scope, provide
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
@@ -30,8 +30,12 @@ class DatabaseProvider(Provider):
         self._database_settings = database_settings
 
     @provide(scope=Scope.APP)
-    def db_engine(self) -> AsyncEngine:
-        return create_sa_engine(self._database_settings.url_obj)
+    async def db_engine(self) -> AsyncIterator[AsyncEngine]:
+        engine = create_sa_engine(self._database_settings.url_obj)
+        try:
+            yield engine
+        finally:
+            await engine.dispose()
 
     @provide(scope=Scope.APP)
     def db_session_factory(
