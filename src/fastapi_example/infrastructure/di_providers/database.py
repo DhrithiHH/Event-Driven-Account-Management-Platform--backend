@@ -4,23 +4,29 @@ from dishka import Provider, Scope, provide
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from fastapi_example.application.interfaces.database import ITransactionManager
+from fastapi_example.application.interfaces.database.repositories.mappers import (
+    INotificationEventsRepositoryMapper,
+    IUsersRepositoryMapper,
+)
+from fastapi_example.application.interfaces.database.repositories.notifications import (
+    INotificationEventsRepository,
+)
+from fastapi_example.application.interfaces.database.repositories.users import (
+    IUsersRepository,
+)
 from fastapi_example.infrastructure import DatabaseSettings
 from fastapi_example.infrastructure.database import (
     TransactionManager,
     create_sa_engine,
     create_sa_session_factory,
 )
-from fastapi_example.infrastructure.database.repositories.mappers import (
-    UsersRepositoryMapper,
-)
-from fastapi_example.application.interfaces.database.repositories.users import (
-    IUsersRepository,
-)
-from fastapi_example.application.interfaces.database.repositories.mappers import (
-    IUsersRepositoryMapper,
-)
 from fastapi_example.infrastructure.database.repositories import (
+    SQLAlchemyNotificationEventsRepository,
     SQLAlchemyUsersRepository,
+)
+from fastapi_example.infrastructure.database.repositories.mappers import (
+    NotificationEventsRepositoryMapper,
+    UsersRepositoryMapper,
 )
 
 
@@ -60,6 +66,12 @@ class DBMappersProvider(Provider):
     def users_repository_mapper(self) -> IUsersRepositoryMapper:
         return UsersRepositoryMapper()
 
+    @provide(scope=Scope.APP)
+    def notification_events_repository_mapper(
+        self,
+    ) -> INotificationEventsRepositoryMapper:
+        return NotificationEventsRepositoryMapper()
+
 
 class DBRepositoriesProvider(Provider):
     @provide(scope=Scope.REQUEST)
@@ -67,3 +79,9 @@ class DBRepositoriesProvider(Provider):
         self, session: AsyncSession, mapper: IUsersRepositoryMapper
     ) -> IUsersRepository:
         return SQLAlchemyUsersRepository(session, mapper)
+
+    @provide(scope=Scope.REQUEST)
+    def notification_events_repository(
+        self, session: AsyncSession, mapper: INotificationEventsRepositoryMapper
+    ) -> INotificationEventsRepository:
+        return SQLAlchemyNotificationEventsRepository(session, mapper)

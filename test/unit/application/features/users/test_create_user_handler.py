@@ -4,20 +4,24 @@ from uuid import uuid4
 import pytest
 
 from fastapi_example.application.exceptions.http_exceptions import (
-    ConflictError,
     BadRequestError,
+    ConflictError,
     ServiceUnavailableError,
 )
-from fastapi_example.application.interfaces.http_clients import EmailVerificationResult
-from fastapi_example.application.interfaces.services import TEmailMessage
-from fastapi_example.application.features.users.services import EmailValidatorService
 from fastapi_example.application.features.users.create_user.command import (
     CreateUserCommand,
 )
 from fastapi_example.application.features.users.create_user.handler import (
     CreateUserHandler,
 )
-from fastapi_example.domain.entities import User
+from fastapi_example.application.features.users.services import EmailValidatorService
+from fastapi_example.application.interfaces.http_clients import EmailVerificationResult
+from fastapi_example.application.interfaces.services import TEmailMessage
+from fastapi_example.domain.entities import (
+    NotificationEventStatus,
+    NotificationEventType,
+    User,
+)
 
 
 class TestCreateUserHandler:
@@ -29,6 +33,7 @@ class TestCreateUserHandler:
         mock_transaction_manager,
         mock_email_verifier,
         mock_email_notifications,
+        mock_notification_events,
     ) -> CreateUserHandler:
         return CreateUserHandler(
             repository=mock_users_repository,
@@ -36,6 +41,7 @@ class TestCreateUserHandler:
             transaction_manager=mock_transaction_manager,
             email_validator=EmailValidatorService(mock_email_verifier),
             email_notifications=mock_email_notifications,
+            notification_events=mock_notification_events,
         )
 
     @pytest.mark.asyncio
@@ -45,6 +51,7 @@ class TestCreateUserHandler:
         mock_users_repository,
         mock_hasher,
         mock_email_notifications,
+        mock_notification_events,
     ):
         user_id = uuid4()
         cmd = CreateUserCommand(
@@ -71,8 +78,17 @@ class TestCreateUserHandler:
         assert result.email == cmd.email
         mock_users_repository.create_user.assert_called_once()
         mock_hasher.hash_password.assert_called_once()
+        mock_notification_events.create_notification_event.assert_awaited_once()
+        event_data = mock_notification_events.create_notification_event.call_args.args[0]
+        assert event_data["user_id"] == user_id
+        assert event_data["event_type"] == NotificationEventType.ACCOUNT_CREATED
+        assert event_data["status"] == NotificationEventStatus.PENDING
         mock_email_notifications.enqueue.assert_called_once()
         enqueued: TEmailMessage = mock_email_notifications.enqueue.call_args.args[0]
+        assert (
+            enqueued.event_id
+            == mock_notification_events.create_notification_event.return_value.id
+        )
         assert enqueued.recipient == cmd.email
         assert enqueued.subject == "Account created"
 

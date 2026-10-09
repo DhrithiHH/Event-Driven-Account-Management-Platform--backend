@@ -1,9 +1,12 @@
 import logging
 from dataclasses import asdict
 
+from fastapi_example.application.exceptions.http_exceptions import ConflictError
 from fastapi_example.application.interfaces.database import ITransactionManager
 from fastapi_example.application.interfaces.database.repositories import (
+    INotificationEventsRepository,
     IUsersRepository,
+    TCreateNotificationEvent,
     TCreateUser,
 )
 from fastapi_example.application.interfaces.security import IHasher
@@ -12,9 +15,13 @@ from fastapi_example.application.interfaces.services import (
     IEmailValidatorService,
     TEmailMessage,
 )
+from fastapi_example.domain.entities import (
+    NotificationEventStatus,
+    NotificationEventType,
+    User,
+)
+
 from .command import CreateUserCommand
-from fastapi_example.domain.entities import User
-from fastapi_example.application.exceptions.http_exceptions import ConflictError
 
 log = logging.getLogger(__name__)
 
@@ -27,12 +34,14 @@ class CreateUserHandler:
         transaction_manager: ITransactionManager,
         email_validator: IEmailValidatorService,
         email_notifications: IEmailNotificationsService,
+        notification_events: INotificationEventsRepository,
     ) -> None:
         self._repository = repository
         self._hasher = hasher
         self._transaction_manager = transaction_manager
         self._email_validator = email_validator
         self._email_notifications = email_notifications
+        self._notification_events = notification_events
 
     async def execute(self, cmd: CreateUserCommand) -> User:
         await self._email_validator.validate(cmd.email)
@@ -52,9 +61,19 @@ class CreateUserHandler:
 
             cmd.password = self._hasher.hash_password(cmd.password)
             user = await self._repository.create_user(TCreateUser(**asdict(cmd)))
+            event = await self._notification_events.create_notification_event(
+                TCreateNotificationEvent(
+                    user_id=user.id,
+                    event_type=NotificationEventType.ACCOUNT_CREATED,
+                    recipient=user.email,
+                    status=NotificationEventStatus.PENDING,
+                )
+            )
 
         await self._email_notifications.enqueue(
             TEmailMessage(
+                event_id=event.id,
+                event_type=event.event_type,
                 recipient=user.email,
                 subject="Account created",
                 content=(

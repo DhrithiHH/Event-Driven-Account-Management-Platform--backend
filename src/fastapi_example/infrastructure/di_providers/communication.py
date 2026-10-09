@@ -28,4 +28,4 @@ class CommunicationProvider(Provider):
 
     @provide(scope=Scope.APP)
     def email_sender(self, client: aiosmtplib.SMTP) -> IEmailSender:
-        return EmailSender(client)
+        return EmailSender(client, self._smtp_settings)

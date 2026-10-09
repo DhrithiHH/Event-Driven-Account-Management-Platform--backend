@@ -2,26 +2,27 @@ import logging
 
 from dishka import AsyncContainer, make_async_container
 
+from fastapi_example.application.di_providers.features import (
+    AuthFeaturesProvider,
+    NotificationsFeaturesProvider,
+    UsersFeaturesProvider,
+)
 from fastapi_example.application.di_providers.services import (
     AuthServiceProvider,
-    RateLimiterServiceProvider,
     EmailNotificationsServiceProvider,
-)
-from fastapi_example.application.di_providers.features import (
-    UsersFeaturesProvider,
-    AuthFeaturesProvider,
+    RateLimiterServiceProvider,
 )
 from fastapi_example.infrastructure.di_providers import (
     CacheProvider,
-    DatabaseProvider,
-    HasherProvider,
     CacheRepositoriesProvider,
+    CommunicationProvider,
+    DatabaseProvider,
     DBMappersProvider,
     DBRepositoriesProvider,
+    HasherProvider,
     HTTPClientsProvider,
-    MessageBrokerProvider,
-    CommunicationProvider,
     MessageBrokerProducersProvider,
+    MessageBrokerProvider,
 )
 
 from .settings import Settings
@@ -44,6 +45,7 @@ def setup_di_container(
         RateLimiterServiceProvider(),
         UsersFeaturesProvider(),
         AuthFeaturesProvider(),
+        NotificationsFeaturesProvider(),
         HTTPClientsProvider(settings.infrastructure.email_verifier),
         MessageBrokerProvider(settings.infrastructure.message_broker),
         CommunicationProvider(settings.infrastructure.smtp),

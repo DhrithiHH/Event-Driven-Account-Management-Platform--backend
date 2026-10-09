@@ -4,17 +4,21 @@ from uuid import uuid4
 import pytest
 
 from fastapi_example.application.exceptions.http_exceptions import (
-    NotFoundError,
     ForbiddenError,
-)
-from fastapi_example.application.features.users.delete_user.handler import (
-    DeleteUserHandler,
+    NotFoundError,
 )
 from fastapi_example.application.features.users.delete_user.command import (
     DeleteUserCommand,
 )
+from fastapi_example.application.features.users.delete_user.handler import (
+    DeleteUserHandler,
+)
 from fastapi_example.application.interfaces.services import TEmailMessage
-from fastapi_example.domain.entities import User
+from fastapi_example.domain.entities import (
+    NotificationEventStatus,
+    NotificationEventType,
+    User,
+)
 
 
 class TestDeleteUserHandler:
@@ -25,12 +29,14 @@ class TestDeleteUserHandler:
         mock_hasher,
         mock_transaction_manager,
         mock_email_notifications,
+        mock_notification_events,
     ) -> DeleteUserHandler:
         return DeleteUserHandler(
             repository=mock_users_repository,
             hasher=mock_hasher,
             transaction_manager=mock_transaction_manager,
             email_notifications=mock_email_notifications,
+            notification_events=mock_notification_events,
         )
 
     @pytest.mark.asyncio
@@ -40,6 +46,7 @@ class TestDeleteUserHandler:
         mock_users_repository,
         mock_hasher,
         mock_email_notifications,
+        mock_notification_events,
     ):
         user_id = uuid4()
         cmd = DeleteUserCommand(
@@ -68,6 +75,11 @@ class TestDeleteUserHandler:
         )
         mock_hasher.verify_password.assert_called_once_with(cmd.password, user.password)
         mock_users_repository.delete_user.assert_called_once_with(user_id=user_id)
+        mock_notification_events.create_notification_event.assert_awaited_once()
+        event_data = mock_notification_events.create_notification_event.call_args.args[0]
+        assert event_data["user_id"] == user_id
+        assert event_data["event_type"] == NotificationEventType.ACCOUNT_DELETED
+        assert event_data["status"] == NotificationEventStatus.PENDING
         mock_email_notifications.enqueue.assert_called_once()
         enqueued: TEmailMessage = mock_email_notifications.enqueue.call_args.args[0]
         assert enqueued.recipient == user.email

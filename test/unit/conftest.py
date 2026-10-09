@@ -1,11 +1,18 @@
 from collections.abc import Iterator
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
+from uuid import uuid4
 
 import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
 from fastapi_example.application.interfaces.http_clients import EmailVerificationResult
+from fastapi_example.domain.entities import (
+    NotificationEvent,
+    NotificationEventStatus,
+    NotificationEventType,
+)
 from fastapi_example.infrastructure.settings import JWTSettings
 
 
@@ -83,4 +90,21 @@ def mock_email_verifier():
 def mock_email_notifications():
     mock = AsyncMock()
     mock.enqueue = AsyncMock(return_value=None)
+    return mock
+
+
+@pytest.fixture
+def mock_notification_events():
+    mock = AsyncMock()
+    mock.create_notification_event = AsyncMock(
+        return_value=NotificationEvent(
+            id=uuid4(),
+            user_id=uuid4(),
+            event_type=NotificationEventType.ACCOUNT_CREATED,
+            recipient="test@example.com",
+            status=NotificationEventStatus.PENDING,
+            created_at=datetime.now(UTC),
+            processed_at=None,
+        )
+    )
     return mock

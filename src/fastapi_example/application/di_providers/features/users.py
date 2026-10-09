@@ -1,20 +1,21 @@
 from dishka import Provider, Scope, provide
 
 from fastapi_example.application.features.users.create_user import CreateUserHandler
-from fastapi_example.application.features.users.get_user import GetUserHandler
-from fastapi_example.application.features.users.update_user import UpdateUserHandler
 from fastapi_example.application.features.users.delete_user import DeleteUserHandler
+from fastapi_example.application.features.users.get_user import GetUserHandler
+from fastapi_example.application.features.users.services import EmailValidatorService
+from fastapi_example.application.features.users.update_user import UpdateUserHandler
 from fastapi_example.application.interfaces.database import ITransactionManager
 from fastapi_example.application.interfaces.database.repositories import (
+    INotificationEventsRepository,
     IUsersRepository,
 )
+from fastapi_example.application.interfaces.http_clients import IEmailVerifier
 from fastapi_example.application.interfaces.security import IHasher
 from fastapi_example.application.interfaces.services import (
     IEmailNotificationsService,
     IEmailValidatorService,
 )
-from fastapi_example.application.features.users.services import EmailValidatorService
-from fastapi_example.application.interfaces.http_clients import IEmailVerifier
 
 
 class UsersFeaturesProvider(Provider):
@@ -35,6 +36,7 @@ class UsersFeaturesProvider(Provider):
         transaction_manager: ITransactionManager,
         email_validator: IEmailValidatorService,
         email_notifications: IEmailNotificationsService,
+        notification_events: INotificationEventsRepository,
     ) -> CreateUserHandler:
         return CreateUserHandler(
             repository,
@@ -42,6 +44,7 @@ class UsersFeaturesProvider(Provider):
             transaction_manager,
             email_validator,
             email_notifications,
+            notification_events,
         )
 
     @provide(scope=Scope.REQUEST)
@@ -59,9 +62,14 @@ class UsersFeaturesProvider(Provider):
         transaction_manager: ITransactionManager,
         email_validator: IEmailValidatorService,
         email_notifications: IEmailNotificationsService,
+        notification_events: INotificationEventsRepository,
     ) -> UpdateUserHandler:
         return UpdateUserHandler(
-            repository, transaction_manager, email_validator, email_notifications
+            repository,
+            transaction_manager,
+            email_validator,
+            email_notifications,
+            notification_events,
         )
 
     @provide(scope=Scope.REQUEST)
@@ -71,7 +79,12 @@ class UsersFeaturesProvider(Provider):
         hasher: IHasher,
         transaction_manager: ITransactionManager,
         email_notifications: IEmailNotificationsService,
+        notification_events: INotificationEventsRepository,
     ) -> DeleteUserHandler:
         return DeleteUserHandler(
-            repository, hasher, transaction_manager, email_notifications
+            repository,
+            hasher,
+            transaction_manager,
+            email_notifications,
+            notification_events,
         )

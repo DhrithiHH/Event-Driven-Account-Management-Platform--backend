@@ -1,6 +1,7 @@
 from fastapi import APIRouter, FastAPI
 
 from .auth import auth_router
+from .notifications import notifications_router
 from .users import users_router
 
 
@@ -15,6 +16,7 @@ def setup_controllers(app: FastAPI, *routers: APIRouter) -> None:
 
 __all__ = (
     "auth_router",
-    "users_router",
+    "notifications_router",
     "setup_controllers",
+    "users_router",
 )

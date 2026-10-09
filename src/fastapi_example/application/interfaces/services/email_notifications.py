@@ -1,10 +1,15 @@
 from dataclasses import dataclass
+from uuid import UUID
 
 import aiosmtplib
+
+from fastapi_example.domain.entities import NotificationEventType
 
 
 @dataclass
 class TEmailMessage:
+    event_id: UUID
+    event_type: NotificationEventType
     recipient: str
     subject: str
     content: str

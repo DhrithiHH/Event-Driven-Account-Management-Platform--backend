@@ -1,20 +1,27 @@
 import logging
 
+from fastapi_example.application.exceptions.http_exceptions import (
+    ForbiddenError,
+    NotFoundError,
+)
 from fastapi_example.application.interfaces.database import ITransactionManager
 from fastapi_example.application.interfaces.database.repositories import (
+    INotificationEventsRepository,
     IUsersRepository,
+    TCreateNotificationEvent,
 )
 from fastapi_example.application.interfaces.security import IHasher
 from fastapi_example.application.interfaces.services import (
     IEmailNotificationsService,
     TEmailMessage,
 )
-from .command import DeleteUserCommand
-from fastapi_example.domain.entities import User
-from fastapi_example.application.exceptions.http_exceptions import (
-    NotFoundError,
-    ForbiddenError,
+from fastapi_example.domain.entities import (
+    NotificationEventStatus,
+    NotificationEventType,
+    User,
 )
+
+from .command import DeleteUserCommand
 
 log = logging.getLogger(__name__)
 
@@ -26,11 +33,13 @@ class DeleteUserHandler:
         hasher: IHasher,
         transaction_manager: ITransactionManager,
         email_notifications: IEmailNotificationsService,
+        notification_events: INotificationEventsRepository,
     ):
         self._repository = repository
         self._hasher = hasher
         self._transaction_manager = transaction_manager
         self._email_notifications = email_notifications
+        self._notification_events = notification_events
 
     async def execute(self, cmd: DeleteUserCommand) -> User:
         async with self._transaction_manager:
@@ -46,10 +55,20 @@ class DeleteUserHandler:
                 )
                 raise ForbiddenError("Incorrect password confirmation")
 
+            event = await self._notification_events.create_notification_event(
+                TCreateNotificationEvent(
+                    user_id=user.id,
+                    event_type=NotificationEventType.ACCOUNT_DELETED,
+                    recipient=user.email,
+                    status=NotificationEventStatus.PENDING,
+                )
+            )
             result = await self._repository.delete_user(user_id=cmd.user_id)
 
         await self._email_notifications.enqueue(
             TEmailMessage(
+                event_id=event.id,
+                event_type=event.event_type,
                 recipient=result.email,
                 subject="Account deleted",
                 content=(

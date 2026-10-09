@@ -4,18 +4,22 @@ from uuid import uuid4
 import pytest
 
 from fastapi_example.application.exceptions.http_exceptions import (
-    NotFoundError,
     ConflictError,
+    NotFoundError,
 )
-from fastapi_example.application.interfaces.services import TEmailMessage
 from fastapi_example.application.features.users.services import EmailValidatorService
-from fastapi_example.application.features.users.update_user.handler import (
-    UpdateUserHandler,
-)
 from fastapi_example.application.features.users.update_user.command import (
     UpdateUserCommand,
 )
-from fastapi_example.domain.entities import User
+from fastapi_example.application.features.users.update_user.handler import (
+    UpdateUserHandler,
+)
+from fastapi_example.application.interfaces.services import TEmailMessage
+from fastapi_example.domain.entities import (
+    NotificationEventStatus,
+    NotificationEventType,
+    User,
+)
 
 
 class TestUpdateUserHandler:
@@ -26,12 +30,14 @@ class TestUpdateUserHandler:
         mock_transaction_manager,
         mock_email_verifier,
         mock_email_notifications,
+        mock_notification_events,
     ) -> UpdateUserHandler:
         return UpdateUserHandler(
             repository=mock_users_repository,
             transaction_manager=mock_transaction_manager,
             email_validator=EmailValidatorService(mock_email_verifier),
             email_notifications=mock_email_notifications,
+            notification_events=mock_notification_events,
         )
 
     @pytest.mark.asyncio
@@ -213,6 +219,7 @@ class TestUpdateUserHandler:
         update_user_handler: UpdateUserHandler,
         mock_users_repository,
         mock_email_notifications,
+        mock_notification_events,
     ):
         user_id = uuid4()
         cmd = UpdateUserCommand(user_id=user_id, email="newemail@example.com")
@@ -240,6 +247,11 @@ class TestUpdateUserHandler:
 
         assert result.email == "newemail@example.com"
         mock_users_repository.update_user.assert_called_once()
+        mock_notification_events.create_notification_event.assert_awaited_once()
+        event_data = mock_notification_events.create_notification_event.call_args.args[0]
+        assert event_data["user_id"] == user_id
+        assert event_data["event_type"] == NotificationEventType.ACCOUNT_UPDATED
+        assert event_data["status"] == NotificationEventStatus.PENDING
         mock_email_notifications.enqueue.assert_called_once()
 
     @pytest.mark.asyncio
