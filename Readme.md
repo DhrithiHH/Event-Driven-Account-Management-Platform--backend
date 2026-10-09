@@ -1,637 +1,272 @@
-# FastAPI Example
+# FastAPI Notification Backend
 
-Production-ready educational FastAPI service implementing **Vertical Slices** + **CQRS** + **Onion Architecture** patterns. Features async SQLAlchemy 2.0, JWT authentication, dependency injection (Dishka), Redis caching/rate limiting, asynchronous mail notifications via **FastStream + Kafka**, and comprehensive observability stack (Loki + Promtail + Grafana). Dockerized and fully automated.
+FastAPI-based account service with JWT authentication, PostgreSQL persistence, Redis-backed rate limiting, and asynchronous lifecycle email notifications. Every account lifecycle email is persisted as a notification event so the client can show real processing history rather than inferred activity.
 
-## Table of Contents
-- [Tech Stack](#tech-stack)
-- [Architecture](#architecture)
-  - [Core Principles](#core-principles)
-  - [Layered Structure](#layered-structure)
-  - [Vertical Slices](#vertical-slices)
-  - [CQRS Pattern](#cqrs-pattern)
-- [Project Structure](#project-structure)
-- [Requirements](#requirements)
-- [Environment Setup](#environment-setup)
-- [JWT Key Generation](#jwt-key-generation)
-- [Quick Start](#quick-start)
-- [API Overview](#api-overview)
-- [Monitoring & Logging](#monitoring--logging)
-- [Rate Limiting](#rate-limiting)
-- [Email Verification](#email-verification)
-- [Email Notifications (FastStream + Kafka)](#email-notifications-faststream--kafka)
-- [Database Migrations](#database-migrations)
-- [Dependency Injection](#dependency-injection)
-- [Useful Commands](#useful-commands)
+**Frontend:** [fastapi-notification-frontend](https://github.com/DhrithiHH/fastapi-notification-frontend)
 
-## Tech Stack
+**Backend repository:** [fastapi-notification-backend](https://github.com/DhrithiHH/fastapi-notification-backend)
 
-### Core Framework & Web
-- **FastAPI** 0.119+ — Modern async web framework
-- **Uvicorn** 0.38+ — ASGI server
-- **Pydantic** 2+ — Data validation & settings management
+## What it does
 
-### Database & ORM
-- **SQLAlchemy 2.0** — Async ORM with full type hints
-- **asyncpg** 0.30+ — High-performance PostgreSQL async driver
-- **Alembic** 1.17+ — Database migrations
+The service supports a focused account journey:
 
-### Security & Authentication
-- **PyJWT** 2.10+ — JWT token handling
-- **pwdlib[argon2]** 0.3+ — Password hashing (Argon2)
-- **cryptography** 46+ — Cryptographic operations
+1. Register an account.
+2. Obtain a JWT access token with username and password.
+3. Read or update the authenticated account.
+4. Delete the account after password confirmation.
+5. View persisted lifecycle notification events for the authenticated account.
 
-### Dependency Injection
-- **Dishka** 1.7+ — Lightweight, scoped async DI container
-
-### Caching & Rate Limiting
-- **Redis** 7.3+ — Distributed cache & rate limiting state
-
-### Messaging & Background Processing
-- **FastStream** 0.6+ — Async message processing framework
-- **Kafka** 4.2+ — Event broker for background workflows
-- **MailDev** — Local SMTP server + web UI for email testing
-
-### Observability
-- **Loki** — Log aggregation
-- **Promtail** — Log shipper
-- **Grafana** — Dashboard & visualization
-
-### Development Tools
-- **uv** — Ultra-fast Python package manager & runner
-- **Ruff** 0.15+ — Fast Python linter & formatter
-- **MyPy** 1.19+ — Static type checker
-- **Docker** & **Docker Compose** — Containerization
+Registration, profile changes, and account deletion each create an event and enqueue an email asynchronously. The HTTP request does not wait for SMTP delivery.
 
 ## Architecture
 
-### Core Principles
-
-The project implements three complementary architectural patterns for scalability, maintainability, and testability:
-
-#### **Vertical Slices**
-Features are organized as independent, self-contained vertical slices. Each slice (e.g., `users`, `auth`) encapsulates all layers of functionality—from presentation to infrastructure—reducing coupling and enabling independent feature development. Each feature has its own commands/queries and handlers, organized under `application/features/{feature}/{operation}/`.
-
-#### **CQRS (Command Query Responsibility Segregation)**
-Requests are split into two types:
-- **Commands** — State-changing operations (create, update, delete). Each command is handled by a dedicated handler.
-- **Queries** — State-reading operations (get, list). Each query is handled by a dedicated handler.
-
-This separation provides:
-- Clear intent in code (command vs. query operations)
-- Optimizable read/write paths independently
-- Simplified testing and reasoning about side effects
-
-#### **Onion Architecture (Layered)**
-The codebase is organized in concentric layers, each with well-defined responsibilities:
-
-```
-┌─────────────────────────────────────────┐
-│   Presentation (API, Controllers)       │  HTTP endpoints, routing
-├─────────────────────────────────────────┤
-│   Application (Features, Handlers)      │  Business logic, use cases
-├─────────────────────────────────────────┤
-│   Domain (Entities, Business Rules)     │  Core entities, invariants
-├─────────────────────────────────────────┤
-│   Infrastructure (Repositories, DB)     │  External integrations
-└─────────────────────────────────────────┘
+```mermaid
+flowchart LR
+    FE[React / AccountFlow] --> API[FastAPI API]
+    API --> PG[(PostgreSQL)]
+    API --> Redis[(Redis rate limiting)]
+    API --> Kafka[Kafka topic: email_notifications]
+    Kafka --> FS[FastStream consumer]
+    FS --> SMTP[Email notification service]
+    SMTP --> MailDev[SMTP / MailDev]
+    FS --> PG
 ```
 
-### Layered Structure
+- **PostgreSQL** stores users and `notification_events`.
+- **Redis** stores sliding-window rate-limit state.
+- **Kafka** decouples lifecycle email publishing from HTTP handling.
+- **FastStream** consumes the `email_notifications` topic and updates the matching notification event as processing progresses.
+- **MailDev** is the local SMTP sink and web viewer used by the Docker development stack.
 
-#### **1. Domain Layer** (`domain/`)
-- **Purpose:** Core business entities and rules (highest level of abstraction).
-- **Contents:** Entity dataclasses (`User`), value objects, business constants.
-- **Dependencies:** None (pure Python, framework-agnostic).
-- **Example:** `User` entity with core properties and domain mixins.
+The application is organized around domain, application, infrastructure, and presentation layers, with feature handlers and Dishka dependency injection.
 
-#### **2. Application Layer** (`application/`)
-- **Purpose:** Business logic orchestration, use-case implementation via CQRS handlers.
-- **Sub-layers:**
-  - `features/` — Vertical slices with commands, queries, and handlers
-  - `interfaces/` — Protocols for repositories, services, and external contracts
-  - `services/` — Domain services (rate limiting, JWT token handling)
-  - `exceptions/` — Application-level exceptions
-- **Dependencies:** Domain, external interfaces, infrastructure services.
-- **Example:** `CreateUserHandler` validates input, checks for duplicates, hashes password, persists via repository.
+## Technology stack
 
-#### **3. Infrastructure Layer** (`infrastructure/`)
-- **Purpose:** External systems, adapters, and concrete implementations.
-- **Sub-layers:**
-  - `database/` — SQLAlchemy models, repository implementations, migrations, connection pooling
-  - `cache/` — Redis client wrapper, rate limiter cache repository
-  - `security/` — Password hasher implementations
-  - `servers/` — Uvicorn server configuration
-  - `di_providers/` — Dishka provider implementations
-- **Dependencies:** Domain, application interfaces, external libraries.
-- **Example:** `SQLAlchemyUsersRepository` implements `IUsersRepository`, using SQLAlchemy ORM.
+| Area | Implemented technology |
+| --- | --- |
+| API | FastAPI `>=0.119.1,<0.120.0`, Uvicorn `>=0.38.0,<0.39.0` |
+| Validation/settings | Pydantic Settings `>=2.11.0,<3.0.0` |
+| Database | PostgreSQL, SQLAlchemy `>=2.0.44,<3.0.0`, asyncpg `>=0.30.0,<0.31.0`, Alembic `>=1.17.0,<2.0.0` |
+| Authentication | PyJWT `>=2.10.1,<3.0.0`, RS256 keys, pwdlib with Argon2 `>=0.3.0,<0.4.0` |
+| Messaging/email | FastStream Kafka `>=0.6.7`, Kafka, aiosmtplib `>=5.1.0`, MailDev |
+| Rate limiting | Redis `>=7.3.0` |
+| DI and tooling | Dishka `>=1.7.2,<2.0.0`, uv, pytest, Ruff, MyPy |
+| Optional local monitoring profile | Grafana, Loki, Promtail |
 
-#### **4. Presentation Layer** (`presentation/`)
-- **Purpose:** HTTP API, request/response handling, routing.
-- **Sub-layers:**
-  - `api/v1/` — API version management (routes, controllers, DTOs)
-  - `controllers/` — Route handlers that instantiate commands/queries and invoke handlers
-  - `dto/` — Request/response schemas (Pydantic models)
-  - `middlewares/` — HTTP middlewares (CORS, logging, etc.)
-  - `handlers/` — Exception handlers, error responses
-- **Dependencies:** Application handlers, domain entities.
-- **Example:** `POST /api/v1/users` endpoint creates `CreateUserCommand`, invokes handler, returns response DTO.
+## Features
 
-### CQRS Pattern Implementation
+- User registration, current-user lookup, profile update, and password-confirmed deletion.
+- JWT-protected account and notification endpoints.
+- Argon2 password hashing through `pwdlib[argon2]`.
+- Redis-backed per-IP and per-user rate limits on API routes.
+- Asynchronous `ACCOUNT_CREATED`, `ACCOUNT_UPDATED`, and `ACCOUNT_DELETED` emails.
+- Persistent, user-scoped notification history sorted newest first.
+- Kafka messages carry the same UUID as the persisted notification event.
+- SMTP health checking with `NOOP` and reconnection for stale transports after an SMTP server restart.
 
-**Commands** handle state-changing operations (create, update, delete). **Queries** handle state-reading operations (get, list). Each is defined as a simple dataclass and executed by a dedicated handler class. Controllers create the appropriate command/query, invoke the handler, and return the response.
+## Notification lifecycle
 
-## Project Structure
+### Event types
 
-```
-fastapi_example/
-├── src/fastapi_example/
-│   ├── __init__.py
-│   ├── __main__.py                  # Application entry point
-│   │
-│   ├── core/                        # Application setup & composition
-│   │   ├── di_container.py          # DI container (Dishka) wiring
-│   │   └── settings.py              # Core settings loading
-│   │
-│   ├── domain/                      # Domain layer (business rules, entities)
-│   │   ├── entities/
-│   │   │   ├── user.py              # User aggregate root
-│   │   │   └── mixins/              # Shared entity mixins (UUID, timestamps)
-│   │   └── __init__.py
-│   │
-│   ├── application/                 # Application layer (use cases, business logic)
-│   │   ├── features/                # Vertical slices with CQRS
-│   │   │   ├── users/
-│   │   │   │   ├── create_user/     # Create user feature (command)
-│   │   │   │   │   ├── command.py
-│   │   │   │   │   └── handler.py
-│   │   │   │   ├── get_user/        # Get user feature (query)
-│   │   │   │   │   ├── query.py
-│   │   │   │   │   └── handler.py
-│   │   │   │   ├── update_user/     # Update user feature (command)
-│   │   │   │   │   ├── command.py
-│   │   │   │   │   └── handler.py
-│   │   │   │   └── delete_user/     # Delete user feature (command)
-│   │   │   │       ├── command.py
-│   │   │   │       └── handler.py
-│   │   │   └── auth/
-│   │   │       └── create_access_token/
-│   │   │           ├── command.py
-│   │   │           └── handler.py
-│   │   ├── interfaces/              # Protocols (contracts for external dependencies)
-│   │   │   ├── database/            # Repository & transaction manager interfaces
-│   │   │   │   ├── repositories/
-│   │   │   │   │   ├── users.py    # IUsersRepository protocol
-│   │   │   │   │   └── mappers/    # Data mappers (domain ↔ persistence)
-│   │   │   │   └── transaction_manager.py
-│   │   │   ├── services/            # Service interfaces
-│   │   │   │   ├── rate_limiter.py
-│   │   │   │   └── token_jwt.py
-│   │   │   ├── security/
-│   │   │   │   └── hasher.py       # IHasher protocol
-│   │   │   ├── cache/
-│   │   │   └── http_clients/
-│   │   │       └── email_verifier.py # IEmailVerifier protocol
-│   │   ├── services/                # Domain services
-│   │   │   ├── rate_limiter.py
-│   │   │   └── token_jwt.py
-│   │   ├── di_providers/            # DI providers for features
-│   │   │   ├── features/            # Feature handlers registration
-│   │   │   │   ├── users.py
-│   │   │   │   └── auth.py
-│   │   │   └── services/            # Service providers
-│   │   ├── exceptions/
-│   │   │   └── http_exceptions.py  # Application exceptions
-│   │   ├── settings.py              # Application settings
-│   │   └── __init__.py
-│   │
-│   ├── infrastructure/              # Infrastructure layer (DB, cache, external services)
-│   │   ├── database/
-│   │   │   ├── connection.py        # SQLAlchemy engine/session factory
-│   │   │   ├── transaction_manager.py  # Async transaction management
-│   │   │   ├── exceptions.py
-│   │   │   ├── models/              # SQLAlchemy models (ORM)
-│   │   │   │   ├── base.py          # Base model with common fields
-│   │   │   │   ├── user.py          # User model
-│   │   │   │   └── mixins/          # Model mixins
-│   │   │   ├── repositories/        # Repository implementations
-│   │   │   │   ├── users.py         # SQLAlchemyUsersRepository
-│   │   │   │   └── mappers/         # Mappers: ORM model → domain entity
-│   │   │   └── migrations/          # Alembic migration scripts
-│   │   │       ├── env.py
-│   │   │       ├── script.py.mako
-│   │   │       └── versions/        # Migration version files
-│   │   ├── cache/
-│   │   │   ├── connection.py        # Redis client creation
-│   │   │   └── repositories/
-│   │   │       └── rate_limiter.py  # Redis rate limiter repository
-│   │   ├── security/
-│   │   │   └── argon_hasher.py      # Argon2 hasher implementation
-│   │   ├── http_clients/
-│   │   │   └── email_verifier.py    # AbstractAPI email verification client
-│   │   ├── servers/
-│   │   │   └── uvicorn_server.py    # Uvicorn server configuration
-│   │   ├── di_providers/            # DI providers for infrastructure
-│   │   │   ├── database.py
-│   │   │   ├── cache.py
-│   │   │   ├── hasher.py
-│   │   │   ├── http_clients.py
-│   │   │   └── mappers.py
-│   │   ├── settings.py              # Infrastructure settings
-│   │   └── __init__.py
-│   │
-│   └── presentation/                # Presentation layer (HTTP API)
-│       └── api/
-│           ├── common/
-│           │   ├── docs.py          # API documentation schemas
-│           │   ├── handlers/        # Global exception handlers
-│           │   └── middlewares/     # Global middlewares (CORS, logging)
-│           └── v1/                  # API version 1
-│               ├── __init__.py
-│               ├── setup.py         # API initialization
-│               ├── controllers/     # Route handlers
-│               │   ├── users.py    # User routes
-│               │   └── auth.py     # Auth routes
-│               ├── dto/             # Request/Response schemas
-│               │   └── ...         # Pydantic models
-│               ├── dependencies.py  # Route dependencies
-│               ├── handlers/        # Exception handlers
-│               ├── middlewares/     # V1 middlewares
-│               └── setup_controllers.py
-│
-├── monitoring/                      # Observability configuration
-│   ├── grafana/
-│   │   └── datasourses/
-│   │       └── grafana-config.yaml  # Grafana provisioning
-│   ├── loki/
-│   │   └── loki-config.yaml         # Loki log aggregation config
-│   └── promtail/
-│       └── promtail-config.yaml     # Promtail log shipper config
-│
-├── pyproject.toml                   # Project metadata & dependencies
-├── Dockerfile                       # Application container
-├── docker-compose.yaml              # Multi-container orchestration
-└── alembic.ini                      # Alembic configuration
+| Event type | Created when |
+| --- | --- |
+| `ACCOUNT_CREATED` | An account is successfully registered |
+| `ACCOUNT_UPDATED` | The authenticated account is successfully updated |
+| `ACCOUNT_DELETED` | Password-confirmed account deletion succeeds |
+
+### Statuses
+
+```mermaid
+stateDiagram-v2
+    [*] --> PENDING
+    PENDING --> PROCESSING: FastStream receives the Kafka message
+    PROCESSING --> SENT: SMTP send succeeds
+    PROCESSING --> FAILED: Send or processing error
 ```
 
-### Key Files Explained
+`notification_events` contains a UUID `id`, nullable `user_id`, `event_type`, `recipient`, `status`, `created_at`, and nullable `processed_at`.
 
-| File | Purpose |
-|------|---------|
-| `__main__.py` | Entry point: loads settings, initializes DI container, creates app, runs server |
-| `core/di_container.py` | Wires all providers into Dishka async container |
-| `application/features/*/handler.py` | Command/Query handlers—orchestrate business logic, use repositories & services |
-| `infrastructure/database/repositories/*.py` | Repository implementations—query builders, ORM interactions |
-| `presentation/api/v1/controllers/*.py` | Route handlers—accept HTTP requests, delegate to handlers, return responses |
-| `domain/entities/*.py` | Business entities—pure dataclasses with no framework dependencies |
-## Requirements
+- `created_at` records event creation.
+- `processed_at` is set when processing completes as `SENT` or `FAILED`.
+- The event ID is the Kafka `event_id`, so the consumer updates the same database record.
+- The foreign key uses `ON DELETE SET NULL`. A deletion event is created before the user is removed, and notification rows survive account deletion with `user_id` set to `NULL`.
+- `SENT` means the current SMTP operation succeeded. It does **not** prove inbox delivery, opening, or recipient engagement.
 
-- **Python 3.12+** (Docker image uses 3.13 for optimal async performance)
-- **uv** (https://docs.astral.sh/uv/) — For local development
-- **Docker** & **Docker Compose v2** — For containerized setup
-- **PostgreSQL 15+** — Managed via Docker Compose
-- **Redis 7.3+** — Managed via Docker Compose
+### SMTP reconnection behavior
 
-## Environment Setup
+The SMTP client is application-scoped and reused. Before a send, the sender verifies an existing connection with SMTP `NOOP`. A disconnected or stale transport is closed and reconnected using the configured SMTP settings. A send-time transport error closes the client for a later event, but the same message is not retried because it may already have reached the SMTP server. The consumer records that event as `FAILED`.
 
-Create a `.env` file in the project root with the following variables:
+## API
 
-```env
-# Database
-DB_HOST=localhost
-DB_PORT=5432
-DB_USERNAME=postgres
-DB_PASSWORD=postgres
-DB_DATABASE=fastapi_example
+The configured defaults expose Swagger UI at `http://localhost:8080/docs` and ReDoc at `http://localhost:8080/redoc`. The application URL and documentation paths are configurable through `APP_*` settings.
 
-# Redis
-REDIS_HOST=localhost
-REDIS_PORT=6379
-REDIS_PASSWORD=your_secure_redis_password
+Protected endpoints require:
 
-# API Server
-UVICORN_SERVER_HOST=0.0.0.0
-UVICORN_SERVER_PORT=8080
-
-# Application
-APP_TITLE=FastAPI Example
-APP_VERSION=0.1.0
-APP_DOCS_URL=/docs
-APP_REDOC_URL=/redoc
-
-# CORS
-CORS_ORIGINS=["*"]
-CORS_METHODS=["*"]
-CORS_HEADERS=["*"]
-
-# JWT (RSA-2048 keys in .certs/ directory)
-JWT_ALGORITHM=RS256
-JWT_EXPIRATION_HOURS=24
-
-# Email Verification (AbstractAPI)
-EMAIL_VERIFIER_API_KEY=your_abstractapi_key
-# Set True if you want to use an email AbstractAPI or False if you want to use null stub instead.
-EMAIL_VERIFIER_ENABLED=False
+```http
+Authorization: Bearer <access_token>
 ```
 
-**Security Note:** In production, restrict `CORS_ORIGINS` to trusted domains and use secure, environment-specific values for `REDIS_PASSWORD`.
+| Method | Path | Auth | Request body | Success response |
+| --- | --- | --- | --- | --- |
+| `POST` | `/api/v1/users` | No | JSON: `username`, `email`, `password` | `201` user object |
+| `POST` | `/api/v1/token/access` | No | `application/x-www-form-urlencoded`: `username`, `password` | `201` token object |
+| `GET` | `/api/v1/users` | Bearer | — | `200` current user |
+| `PATCH` | `/api/v1/users` | Bearer | JSON with at least one of `username`, `email` | `200` updated user |
+| `DELETE` | `/api/v1/users` | Bearer | JSON: `password` | `200` deleted user |
+| `GET` | `/api/v1/notifications` | Bearer | — | `200` current user's events |
 
-## JWT Key Generation
+### Response shapes
 
-The application uses **RS256** (RSA Signature with SHA-256) for JWT token signing—asymmetric cryptography where the private key signs tokens and the public key verifies them.
+User responses use:
 
-### Generate Keys Locally
+```json
+{
+  "id": "uuid",
+  "username": "account_name",
+  "email": "user@example.com",
+  "created_at": "2026-10-08T18:27:01Z",
+  "updated_at": "2026-10-08T18:27:01Z"
+}
+```
 
-**On Linux/macOS/WSL:**
-```bash
-mkdir -p .certs
+The token endpoint returns:
+
+```json
+{
+  "access_token": "<JWT>",
+  "token_type": "Bearer"
+}
+```
+
+`GET /api/v1/notifications` returns a plain JSON array, scoped from the JWT subject rather than a client-supplied user ID:
+
+```json
+[
+  {
+    "id": "uuid",
+    "event_type": "ACCOUNT_UPDATED",
+    "recipient": "user@example.com",
+    "status": "SENT",
+    "created_at": "2026-10-08T18:27:01Z",
+    "processed_at": "2026-10-08T18:27:02Z"
+  }
+]
+```
+
+Route-specific errors include authentication, validation, conflict, not-found, forbidden, rate-limit, and service-unavailable responses where applicable. Consult `/docs` for the generated contract.
+
+## Local setup
+
+### Prerequisites
+
+- Docker Desktop with Docker Compose.
+- Python 3.12+ and [uv](https://docs.astral.sh/uv/) only if running the backend outside Docker.
+- OpenSSL available on your path if local JWT development keys are absent.
+
+### 1. Configure local environment values
+
+In PowerShell, from this repository:
+
+```powershell
+Copy-Item .env_example .env
+```
+
+Set your own development values in `.env`; do not commit secrets. The settings file recognizes these groups:
+
+| Group | Variables |
+| --- | --- |
+| PostgreSQL | `DB_HOST`, `DB_PORT`, `DB_USERNAME`, `DB_PASSWORD`, `DB_DATABASE` |
+| Redis | `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD` |
+| Kafka | `MESSAGE_BROKER_HOST`, `MESSAGE_BROKER_PORT` |
+| SMTP | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USE_TLS`, `SMTP_SENDER`, optional `SMTP_USERNAME`, `SMTP_PASSWORD` |
+| API/server | `APP_TITLE`, `APP_VERSION`, `APP_DOCS_URL`, `APP_REDOC_URL`, `UVICORN_SERVER_HOST`, `UVICORN_SERVER_PORT` |
+| CORS | `CORS_ORIGINS`, `CORS_METHODS`, `CORS_HEADERS` |
+| Optional email validation | `EMAIL_VERIFIER_API_KEY`, `EMAIL_VERIFIER_ENABLED` |
+| JWT | `JWT_ALGORITHM`, `JWT_EXPIRATION` |
+
+For the API container, use Docker service names: `DB_HOST=postgres`, `REDIS_HOST=redis`, `MESSAGE_BROKER_HOST=kafka` with `MESSAGE_BROKER_PORT=29092`, and `SMTP_HOST=maildev`. The sample `.env_example` uses localhost values for host-run processes.
+
+The JWT service loads RS256 key files from `.certs/jwt-private.pem` and `.certs/jwt-public.pem`. If they are missing, create development-only keys, for example:
+
+```powershell
+New-Item -ItemType Directory -Force .certs
 openssl genrsa -out .certs/jwt-private.pem 2048
 openssl rsa -in .certs/jwt-private.pem -pubout -out .certs/jwt-public.pem
-ls -la .certs/
 ```
 
-**On Windows (Git Bash):**
-```bash
-mkdir -p .certs
-cd .certs
-openssl genrsa -out jwt-private.pem 2048
-openssl rsa -in jwt-private.pem -pubout -out jwt-public.pem
-cd ..
-```
+Keep private keys out of source control and use appropriately managed keys outside local development.
 
-### Verify Keys
-```bash
-# Check private key
-openssl rsa -in .certs/jwt-private.pem -text -noout
+### 2. Start the Docker stack and apply migrations
 
-# Check public key
-openssl rsa -in .certs/jwt-public.pem -pubin -text -noout
-```
-
-### Security Notes
-- **Never commit** `.certs/` directory to version control. Ensure it's in `.gitignore`.
-- For production, store keys in a secrets manager (HashiCorp Vault, AWS Secrets Manager, etc.).
-- Rotate keys periodically in production environments.
-
-## Quick Start
-
-### Local Development (using `uv`)
-
-1. **Install dependencies:**
-   ```bash
-   uv sync
-   ```
-
-2. **Set up environment:**
-   - Copy the `.env.example` or create `.env` (see [Environment Setup](#environment-setup))
-   - Generate JWT keys (see [JWT Key Generation](#jwt-key-generation))
-
-3. **Start PostgreSQL & Redis (in separate terminals or Docker):**
-   ```bash
-   docker compose --profile dev up
-   ```
-
-4. **Apply migrations:**
-   ```bash
-   uv run alembic upgrade head
-   ```
-
-5. **Run the application:**
-   ```bash
-   uv run api
-   ```
-
-6. **Access API:**
-   - Swagger UI: http://localhost:8080/docs
-   - ReDoc: http://localhost:8080/redoc
-   - API Root: http://localhost:8080
-
-### Docker Setup
-
-**Build and run the full stack (API + PostgreSQL + Redis + Kafka + MailDev):**
-```bash
-# Start with API profile
-docker compose --profile api up --build
-
-# In another terminal, apply migrations (if not auto-applied)
+```powershell
+docker compose --profile api up --build -d
 docker compose --profile migrations run --rm migrations
+docker compose ps
 ```
 
-**Stop containers:**
-```bash
-docker compose --profile api down
+The `api` profile starts PostgreSQL, Redis, Kafka, MailDev, and the FastAPI application. The migrations profile runs `alembic upgrade head`.
+
+The API is published on `http://localhost:8080`. To follow logs:
+
+```powershell
+docker compose logs -f api
 ```
 
-**Access services:**
-- API: http://localhost:8080/docs
-- PostgreSQL: `localhost:5432` (forward port with `--profile port-forwarder`)
-- Redis: `localhost:6379` (forward port with `--profile port-forwarder`)
-- Kafka: `localhost:9092` (forward port with `--profile port-forwarder`)
-- MailDev UI: http://localhost:1080 (forward port with `--profile port-forwarder`)
-- MailDev SMTP: `localhost:1025` (forward port with `--profile port-forwarder`)
+### Ports
 
-### Docker Compose Profiles
+| Service | Inside Docker network | Optional host forwarding |
+| --- | --- | --- |
+| FastAPI | `api:8080` | `http://localhost:8080` |
+| PostgreSQL | `postgres:5432` | `127.0.0.1:5432` with `port-forwarder` profile |
+| Redis | `redis:6379` | `127.0.0.1:6379` with `port-forwarder` profile |
+| Kafka | `kafka:29092` | `127.0.0.1:9092` with `port-forwarder` profile |
+| MailDev SMTP | `maildev:1025` | `127.0.0.1:1025` with `port-forwarder` profile |
+| MailDev web UI | `maildev:1080` | `http://127.0.0.1:1080` with `port-forwarder` profile |
 
-| Profile | Purpose | Services |
-|---------|---------|----------|
-| `api` | Run application stack | api, postgres, redis, kafka, maildev |
-| `migrations` | Database migrations | migrations, postgres |
-| `port-forwarder` | Access infra services locally | postgres_port_forwarder, redis_port_forwarder, kafka_port_forwarder, maildev_smtp_port_forwarder, maildev_web_port_forwarder |
-| `monitoring` | Observability stack | loki, promtail, grafana |
+Start the optional forwarding containers only when needed:
 
-**Example: Start API with port forwarding for debugging:**
-```bash
-docker compose --profile api --profile port-forwarder up
+```powershell
+docker compose --profile api --profile port-forwarder up -d
 ```
 
-## API Overview
+### Run outside Docker
 
-### Endpoints
+After configuring host-reachable values and keys:
 
-| Method | Path | Auth | Rate Limit | Description |
-|--------|------|------|-----------|-------------|
-| `POST` | `/api/v1/token/access` | — | 100/min (IP) | Issue JWT token |
-| `POST` | `/api/v1/users` | — | 100/min (IP) | Register new user |
-| `GET` | `/api/v1/users` | Bearer token | 100/min (IP), 20/min (user) | Get user profile |
-| `PATCH` | `/api/v1/users` | Bearer token | 100/min (IP), 20/min (user) | Update user profile |
-| `DELETE` | `/api/v1/users` | Bearer token | 100/min (IP), 20/min (user) | Delete user account |
-
-### Authentication
-
-Register with username/email/password, then login to receive a JWT token. Include the token in subsequent requests via the `Authorization: Bearer {token}` header.
-
-### Response Format
-
-**Success:** Returns user object with `id`, `username`, `email`, `created_at`, `updated_at`.  
-**Error:** Returns JSON with error details and appropriate HTTP status code (400, 401, 404, 409, 429, etc.).
-
-## Monitoring & Logging
-
-The project integrates **Loki** (log aggregation), **Promtail** (log shipper), and **Grafana** (visualization) for comprehensive observability.
-
-**Start monitoring stack:**
-```bash
-docker compose --profile monitoring up
+```powershell
+uv sync --all-extras
+uv run alembic upgrade head
+uv run api
 ```
 
-**Access Grafana:** http://localhost:3000 (anonymous access enabled, Loki datasource pre-configured)
+## Testing and verified checks
 
-## Rate Limiting
+The repository uses pytest with async support. A no-coverage local regression command is:
 
-The project implements a **distributed rate limiter** using Redis with a sliding window algorithm.
-
-**How it works:** Tracks request timestamps per identifier (IP or user ID) in Redis sorted sets. When limit is exceeded, returns HTTP 429 (Too Many Requests).
-
-**Current limits:** All user & auth endpoints enforce 100 requests/minute per IP and 20 requests/minute per authenticated user.
-
-**Customization:** Modify limits in controller files under `presentation/api/v1/controllers/`.
-
-## Email Verification
-
-The application integrates **AbstractAPI Email Reputation** service to validate email addresses during user registration, preventing invalid or disposable email signups.
-
-### How It Works
-
-The `AbstractApiEmailVerifier` client connects to the AbstractAPI service to verify emails across three dimensions:
-- **Format validity** — Checks if email follows RFC standards
-- **Deliverability** — Verifies the domain accepts mail and the mailbox exists
-- **Disposability** — Detects temporary/disposable email services (e.g., 10minutemail.com)
-
-The verifier runs **before** user data is persisted, failing fast with appropriate error messages.
-
-### Setup
-
-1. **Get API key:** Create a free account at [AbstractAPI](https://app.abstractapi.com/) and copy your email reputation API key.
-
-2. **Configure environment:**
-   ```env
-   EMAIL_VERIFIER_API_KEY=sk_test_YOUR_KEY_HERE
-   ```
-
-### How It's Used
-
-During user registration (`POST /api/v1/users`), the `CreateUserHandler` validates the email against three criteria: format validity, deliverability, and disposability. The verifier integrates seamlessly into the registration flow, rejecting invalid emails before user data is persisted.
-
-### Error Handling
-
-The verifier gracefully handles transient failures:
-- **Timeout (>5s)** — Returns deliverability=False, user sees "Email verification service unavailable"
-- **HTTP 401** — API key invalid, logs error, returns HTTP 503 ServiceUnavailable
-- **HTTP 5xx** — Server errors, returns HTTP 503 ServiceUnavailable
-- **Network errors** — Returns deliverability=False, defers to backend validation
-- **Invalid JSON response** — Logs exception, returns deliverability=False
-
-**Best practice:** The service is non-blocking; temporary failures don't prevent signup attempts but encourage users to provide valid, deliverable addresses.
-
-### Architecture
-
-The email verifier follows **Interface Segregation** and **Dependency Inversion** principles:
-
-- **Interface** (`IEmailVerifier` in `application/interfaces/http_clients/`) — Defines the contract
-- **Implementation** (`AbstractApiEmailVerifier` in `infrastructure/http_clients/`) — Concrete adapter to AbstractAPI
-- **DI Registration** (`HTTPClientsProvider` in `infrastructure/di_providers/`) — Scoped as APP-lifetime singleton
-
-This design allows swapping AbstractAPI for another provider (Sendgrid, Mailbox Layer, etc.) without changing application logic.
-
-## Email Notifications (FastStream + Kafka)
-
-The project includes asynchronous email notifications for user lifecycle events:
-- user created
-- user updated
-- user deleted
-
-### How It Works
-
-1. User handlers enqueue email messages through `IEmailNotificationsService.enqueue(...)`.
-2. `EmailNotificationsProducer` publishes events to Kafka topic `email_notifications`.
-3. FastStream consumer (`presentation/faststream/consumers/email_notifications.py`) receives the message and calls `IEmailNotificationsService.send(...)`.
-4. `EmailSender` sends the email via SMTP (MailDev in local development).
-
-This flow decouples HTTP request latency from SMTP delivery and makes notification processing resilient and extensible.
-
-### Local Setup
-
-Use environment variables for messaging and SMTP:
-
-```env
-MESSAGE_BROKER_HOST=localhost
-MESSAGE_BROKER_PORT=9092
-SMTP_HOST=localhost
-SMTP_PORT=1025
-SMTP_USE_TLS=False
-SMTP_SENDER=root@localhost
+```powershell
+$env:PYTHONDONTWRITEBYTECODE='1'
+$env:PYTHONPATH='src'
+python -m pytest -o addopts='' -p no:cacheprovider -p no:cov
 ```
 
-If API runs inside Docker Compose network, use service names instead:
-- `MESSAGE_BROKER_HOST=kafka`
-- `MESSAGE_BROKER_PORT=29092`
-- `SMTP_HOST=maildev`
-- `SMTP_PORT=1025`
+At the documented working revision, the latest reported full regression result was **103 passed, 1 warning**. This is a recorded verification result, not a claim that the command has been run in every clone.
 
-## Database Migrations
+Focused SMTP tests cover stale-transport reconnection, disconnected clients, and the no-resend behavior after a send-time transport error.
 
-Alembic manages schema changes. Migrations are version-controlled in `alembic/versions/`.
+The Docker stack was also manually verified for a successful lifecycle email, an independent MailDev restart, and a subsequent lifecycle email without restarting FastAPI. The subsequent notification reached `SENT` and appeared in MailDev. This demonstrates local transport recovery only; it is not an end-to-end delivery guarantee.
 
-**Common commands:**
-- Create migration: `uv run alembic revision --autogenerate -m "description"`
-- Apply: `uv run alembic upgrade head`
-- Rollback: `uv run alembic downgrade -1`
-- Docker: `docker compose --profile migrations up --build`
+## Limitations and future work
 
-**Best practices:** Always review auto-generated migrations, test locally, keep migrations reversible.
+- No transactional outbox, retry topic, dead-letter queue, or consumer idempotency mechanism is implemented.
+- Kafka/SMTP processing is not exactly-once and does not guarantee delivery to an inbox.
+- A send-time SMTP transport failure is not blindly retried because the SMTP server may have already accepted the message.
+- `SENT` records SMTP-operation success, not recipient inbox placement, opening, or engagement.
+- Potential future improvements include a transactional outbox, explicit retry/DLQ design, idempotency keys, tracing, metrics, and production notification-provider handling.
 
-## Dependency Injection
+## Developer
 
-The project uses **Dishka** for asynchronous, scoped dependency injection. All dependencies are wired in a single container (`core/di_container.py`), eliminating tight coupling.
+**Dhrithi H H**
 
-**How it works:**
-- **Providers** register dependencies with scope (APP, REQUEST, TRANSIENT)
-- **Handlers** declare needed dependencies via type hints
-- **Controllers** inject handlers via `FromDishka[HandlerType]`
-- **Dishka** resolves and manages lifecycles automatically
+Email: [dhrithihh@gmail.com](mailto:dhrithihh@gmail.com)
 
-**Scope types:**
-- `APP` — Application lifetime (DB engines, Redis clients)
-- `REQUEST` — Per HTTP request (handlers, repositories)
-- `TRANSIENT` — New instance each time (DTOs, lightweight services)
-
-## Useful Commands
-
-**Local Development:**
-```bash
-uv sync                                    # Install dependencies
-uv run api                                 # Run application
-uv run ruff check src/ && uv run mypy src/ # Lint & type check
-uv run alembic upgrade head                # Apply migrations
-```
-
-**Docker:**
-```bash
-docker compose --profile api up --build              # Start API stack
-docker compose --profile monitoring up               # Start monitoring
-docker compose --profile api --profile port-forwarder up  # Debug mode
-docker compose logs -f api                 # View logs
-docker compose down                        # Stop all
-```
-
-**Testing API:**
-- Swagger UI: http://localhost:8080/docs
-- ReDoc: http://localhost:8080/redoc
-
----
-
-## Contributing
-
-When adding new features, follow the vertical slice pattern:
-
-1. Create feature folder under `application/features/{feature}/{operation}/`
-2. Define command or query (dataclass)
-3. Implement handler to orchestrate business logic
-4. Register handler in DI container
-5. Create controller route in `presentation/api/v1/controllers/`
-6. Test end-to-end flow
-
----
-
-## License
-
-This project is provided as an educational example.
+GitHub: [github.com/DhrithiHH](https://github.com/DhrithiHH)
