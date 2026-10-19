@@ -1,4 +1,4 @@
-# FastAPI Notification Backend
+#  Event-Driven Account Management Platform Backend
 
 FastAPI-based account service with JWT authentication, PostgreSQL persistence, Redis-backed rate limiting, and asynchronous lifecycle email notifications. Every account lifecycle email is persisted as a notification event so the client can show real processing history rather than inferred activity.
 
