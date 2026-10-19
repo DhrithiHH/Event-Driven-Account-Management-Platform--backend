@@ -132,7 +132,10 @@ async def update_user(
     )
     user_id = jwt_service.get_user_id_from_token(token)
     await rate_limiter_service.check(
-        f"user:{user_id}", request.url.path, limit=20, window=60
+        f"user:{user_id}", 
+        request.url.path, 
+        limit=20, 
+        window=60
     )
     cmd = UpdateUserCommand(user_id, data.username, data.email)
     return UserResponseDTO.model_validate(

@@ -2,9 +2,9 @@
 
 FastAPI-based account service with JWT authentication, PostgreSQL persistence, Redis-backed rate limiting, and asynchronous lifecycle email notifications. Every account lifecycle email is persisted as a notification event so the client can show real processing history rather than inferred activity.
 
-**Frontend:** [fastapi-notification-frontend](https://github.com/DhrithiHH/fastapi-notification-frontend)
+**Frontend:** [Event-Driven-Account-Management-Platform-frontend](https://github.com/DhrithiHH/Event-Driven-Account-Management-Platform-frontend.gitd)
 
-**Backend repository:** [fastapi-notification-backend](https://github.com/DhrithiHH/fastapi-notification-backend)
+**Backend repository:** [Event-Driven-Account-Management-Platform--backend](https://github.com/DhrithiHH/Event-Driven-Account-Management-Platform--backend.git)
 
 ## What it does
 
