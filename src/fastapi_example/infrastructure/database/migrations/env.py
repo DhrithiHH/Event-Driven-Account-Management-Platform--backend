@@ -1,11 +1,19 @@
 import asyncio
+import sys
 from logging.config import fileConfig
+from pathlib import Path
+
+# Ensure src directory is on sys.path
+src_dir = Path(__file__).resolve().parents[4]
+if str(src_dir) not in sys.path:
+    sys.path.insert(0, str(src_dir))
 
 from alembic import context
 from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
+from fastapi_example.infrastructure.database import create_sa_engine
 from fastapi_example.infrastructure.database.models import Base, UserModel  # noqa: F401
 from fastapi_example.infrastructure.settings import load_infrastructure_settings
 
@@ -73,11 +81,7 @@ async def run_async_migrations() -> None:
 
     """
 
-    connectable = async_engine_from_config(
-        config.get_section(config.config_ini_section, {}),
-        prefix="sqlalchemy.",
-        poolclass=pool.NullPool,
-    )
+    connectable = create_sa_engine(db_settings.url_obj)
 
     async with connectable.connect() as connection:
         await connection.run_sync(do_run_migrations)
