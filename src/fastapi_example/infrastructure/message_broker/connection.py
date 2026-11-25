@@ -6,6 +6,12 @@ from pathlib import Path
 from typing import Optional
 
 from faststream.kafka import KafkaBroker
+from faststream.security import (
+    BaseSecurity,
+    SASLPlaintext,
+    SASLScram256,
+    SASLScram512,
+)
 
 from fastapi_example.infrastructure.settings import MessageBrokerSettings
 
@@ -69,10 +75,9 @@ def create_broker(settings: MessageBrokerSettings) -> KafkaBroker:
         security_protocol = "SSL"
         log.info("Detected Kafka certificates; switching security protocol to SSL.")
 
-    broker_kwargs: dict = {}
+    security = None
 
     if security_protocol in ("SSL", "SASL_SSL"):
-        broker_kwargs["security_protocol"] = security_protocol
         ssl_context = ssl.create_default_context(
             purpose=ssl.Purpose.SERVER_AUTH,
             cafile=cafile if (cafile and os.path.exists(cafile)) else None,
@@ -83,28 +88,42 @@ def create_broker(settings: MessageBrokerSettings) -> KafkaBroker:
                 keyfile=keyfile,
                 password=settings.ssl_key_password,
             )
-        broker_kwargs["ssl_context"] = ssl_context
 
-        if security_protocol == "SASL_SSL":
-            if settings.sasl_mechanism:
-                broker_kwargs["sasl_mechanism"] = settings.sasl_mechanism
-            if settings.sasl_username:
-                broker_kwargs["sasl_plain_username"] = settings.sasl_username
-            if settings.sasl_password:
-                broker_kwargs["sasl_plain_password"] = settings.sasl_password
+        if security_protocol == "SSL":
+            security = BaseSecurity(ssl_context=ssl_context)
+        elif security_protocol == "SASL_SSL":
+            mechanism = (settings.sasl_mechanism or "SCRAM-SHA-256").upper()
+            username = settings.sasl_username or ""
+            password = settings.sasl_password or ""
+            if mechanism == "SCRAM-SHA-512":
+                security = SASLScram512(
+                    username=username, password=password, ssl_context=ssl_context
+                )
+            elif mechanism == "PLAIN":
+                security = SASLPlaintext(
+                    username=username, password=password, ssl_context=ssl_context
+                )
+            else:
+                security = SASLScram256(
+                    username=username, password=password, ssl_context=ssl_context
+                )
 
-    elif security_protocol == "SASL_PLAINTEXT":
-        broker_kwargs["security_protocol"] = security_protocol
-        if settings.sasl_mechanism:
-            broker_kwargs["sasl_mechanism"] = settings.sasl_mechanism
-        if settings.sasl_username:
-            broker_kwargs["sasl_plain_username"] = settings.sasl_username
-        if settings.sasl_password:
-            broker_kwargs["sasl_plain_password"] = settings.sasl_password
+    elif security_protocol in ("SASL_PLAINTEXT", "SASL"):
+        mechanism = (settings.sasl_mechanism or "PLAIN").upper()
+        username = settings.sasl_username or ""
+        password = settings.sasl_password or ""
+        if mechanism == "SCRAM-SHA-512":
+            security = SASLScram512(username=username, password=password, use_ssl=False)
+        elif mechanism == "SCRAM-SHA-256":
+            security = SASLScram256(username=username, password=password, use_ssl=False)
+        else:
+            security = SASLPlaintext(
+                username=username, password=password, use_ssl=False
+            )
 
     log.info(
-        "Initializing Kafka broker for %s with security_protocol=%s",
+        "Initializing Kafka broker for %s with security=%s",
         bootstrap_servers,
-        security_protocol,
+        security.__class__.__name__ if security else "None",
     )
-    return KafkaBroker(bootstrap_servers, **broker_kwargs)
+    return KafkaBroker(bootstrap_servers, security=security)
