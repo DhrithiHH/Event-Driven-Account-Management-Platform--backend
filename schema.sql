@@ -21,25 +21,26 @@ CREATE UNIQUE INDEX IF NOT EXISTS ix_users_email ON users (email);
 CREATE INDEX IF NOT EXISTS ix_users_id ON users (id);
 
 -- 3. Create Custom ENUM Types for Notification Events
-DO $$ 
+DO '
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'notification_event_type') THEN
+    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = ''notification_event_type'') THEN
         CREATE TYPE notification_event_type AS ENUM (
-            'ACCOUNT_CREATED',
-            'ACCOUNT_UPDATED',
-            'ACCOUNT_DELETED'
+            ''ACCOUNT_CREATED'',
+            ''ACCOUNT_UPDATED'',
+            ''ACCOUNT_DELETED''
         );
     END IF;
 
-    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'notification_event_status') THEN
+    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = ''notification_event_status'') THEN
         CREATE TYPE notification_event_status AS ENUM (
-            'PENDING',
-            'PROCESSING',
-            'SENT',
-            'FAILED'
+            ''PENDING'',
+            ''PROCESSING'',
+            ''SENT'',
+            ''FAILED''
         );
     END IF;
-END $$;
+END;
+';
 
 -- 4. Create Notification Events Table
 CREATE TABLE IF NOT EXISTS notification_events (
