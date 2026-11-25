@@ -1,8 +1,8 @@
-#  Event-Driven Account Management Platform Backend
+# Event-Driven Account Management Platform Backend
 
-FastAPI-based account service with JWT authentication, PostgreSQL persistence, Redis-backed rate limiting, and asynchronous lifecycle email notifications. Every account lifecycle email is persisted as a notification event so the client can show real processing history rather than inferred activity.
+FastAPI-based account service with JWT authentication, PostgreSQL persistence, Redis-backed rate limiting, and asynchronous lifecycle email notifications powered by Aiven cloud services. Every account lifecycle email is persisted as a notification event so the client can show real processing history rather than inferred activity.
 
-**Frontend:** [Event-Driven-Account-Management-Platform-frontend](https://github.com/DhrithiHH/Event-Driven-Account-Management-Platform-frontend.gitd)
+**Frontend:** [Event-Driven-Account-Management-Platform-frontend](https://github.com/DhrithiHH/Event-Driven-Account-Management-Platform-frontend.git)
 
 **Backend repository:** [Event-Driven-Account-Management-Platform--backend](https://github.com/DhrithiHH/Event-Driven-Account-Management-Platform--backend.git)
 
@@ -23,20 +23,20 @@ Registration, profile changes, and account deletion each create an event and enq
 ```mermaid
 flowchart LR
     FE[React / AccountFlow] --> API[FastAPI API]
-    API --> PG[(PostgreSQL)]
-    API --> Redis[(Redis rate limiting)]
-    API --> Kafka[Kafka topic: email_notifications]
+    API --> PG[(Aiven PostgreSQL)]
+    API --> Redis[(Aiven Redis / Caching)]
+    API --> Kafka[Aiven Kafka topic: email_notifications]
     Kafka --> FS[FastStream consumer]
     FS --> SMTP[Email notification service]
-    SMTP --> MailDev[SMTP / MailDev]
+    SMTP --> CloudSMTP[Cloud SMTP / External Provider]
     FS --> PG
 ```
 
-- **PostgreSQL** stores users and `notification_events`.
-- **Redis** stores sliding-window rate-limit state.
-- **Kafka** decouples lifecycle email publishing from HTTP handling.
+- **Aiven PostgreSQL** stores users and `notification_events` over secure SSL/TLS.
+- **Aiven Redis** stores sliding-window rate-limit state over encrypted TLS (`rediss://`).
+- **Aiven Apache Kafka** decouples lifecycle email publishing from HTTP handling using mTLS client certificates (`ca.pem`, `service.cert`, `service.key`) or SASL_SSL.
 - **FastStream** consumes the `email_notifications` topic and updates the matching notification event as processing progresses.
-- **MailDev** is the local SMTP sink and web viewer used by the Docker development stack.
+- **Cloud SMTP** handles delivery through configured external SMTP providers (SendGrid, Brevo, AWS SES, Mailgun, etc.).
 
 The application is organized around domain, application, infrastructure, and presentation layers, with feature handlers and Dishka dependency injection.
 
@@ -46,23 +46,22 @@ The application is organized around domain, application, infrastructure, and pre
 | --- | --- |
 | API | FastAPI `>=0.119.1,<0.120.0`, Uvicorn `>=0.38.0,<0.39.0` |
 | Validation/settings | Pydantic Settings `>=2.11.0,<3.0.0` |
-| Database | PostgreSQL, SQLAlchemy `>=2.0.44,<3.0.0`, asyncpg `>=0.30.0,<0.31.0`, Alembic `>=1.17.0,<2.0.0` |
+| Database | PostgreSQL / Aiven PostgreSQL, SQLAlchemy `>=2.0.44,<3.0.0`, asyncpg `>=0.30.0,<0.31.0`, Alembic `>=1.17.0,<2.0.0` |
 | Authentication | PyJWT `>=2.10.1,<3.0.0`, RS256 keys, pwdlib with Argon2 `>=0.3.0,<0.4.0` |
-| Messaging/email | FastStream Kafka `>=0.6.7`, Kafka, aiosmtplib `>=5.1.0`, MailDev |
-| Rate limiting | Redis `>=7.3.0` |
-| DI and tooling | Dishka `>=1.7.2,<2.0.0`, uv, pytest, Ruff, MyPy |
-| Optional local monitoring profile | Grafana, Loki, Promtail |
+| Messaging/email | FastStream Kafka `>=0.6.7`, Aiven Apache Kafka (mTLS / SASL_SSL), aiosmtplib `>=5.1.0` |
+| Rate limiting | Redis / Aiven Redis with TLS (`rediss://`) `>=7.3.0` |
+| DI and tooling | Dishka `>=1.7.2,<2.0.0`, pip / uv, pytest, Ruff, MyPy |
 
 ## Features
 
 - User registration, current-user lookup, profile update, and password-confirmed deletion.
-- JWT-protected account and notification endpoints.
+- JWT-protected account and notification endpoints with automatic RSA-2048 keypair generation on startup.
 - Argon2 password hashing through `pwdlib[argon2]`.
-- Redis-backed per-IP and per-user rate limits on API routes.
-- Asynchronous `ACCOUNT_CREATED`, `ACCOUNT_UPDATED`, and `ACCOUNT_DELETED` emails.
+- Redis-backed per-IP and per-user rate limits on API routes with TLS support.
+- Asynchronous `ACCOUNT_CREATED`, `ACCOUNT_UPDATED`, and `ACCOUNT_DELETED` emails via Aiven Kafka.
 - Persistent, user-scoped notification history sorted newest first.
 - Kafka messages carry the same UUID as the persisted notification event.
-- SMTP health checking with `NOOP` and reconnection for stale transports after an SMTP server restart.
+- SMTP health checking with `NOOP` and reconnection for stale transports.
 
 ## Notification lifecycle
 
@@ -91,10 +90,6 @@ stateDiagram-v2
 - The event ID is the Kafka `event_id`, so the consumer updates the same database record.
 - The foreign key uses `ON DELETE SET NULL`. A deletion event is created before the user is removed, and notification rows survive account deletion with `user_id` set to `NULL`.
 - `SENT` means the current SMTP operation succeeded. It does **not** prove inbox delivery, opening, or recipient engagement.
-
-### SMTP reconnection behavior
-
-The SMTP client is application-scoped and reused. Before a send, the sender verifies an existing connection with SMTP `NOOP`. A disconnected or stale transport is closed and reconnected using the configured SMTP settings. A send-time transport error closes the client for a later event, but the same message is not retried because it may already have reached the SMTP server. The consumer records that event as `FAILED`.
 
 ## API
 
@@ -153,95 +148,124 @@ The token endpoint returns:
 ]
 ```
 
-Route-specific errors include authentication, validation, conflict, not-found, forbidden, rate-limit, and service-unavailable responses where applicable. Consult `/docs` for the generated contract.
+---
 
-## Local setup
+## Setup & Running with Aiven
+
+This application runs natively on Python without requiring Docker containers, leveraging managed cloud instances from [Aiven](https://aiven.io).
 
 ### Prerequisites
 
-- Docker Desktop with Docker Compose.
-- Python 3.12+ and [uv](https://docs.astral.sh/uv/) only if running the backend outside Docker.
-- OpenSSL available on your path if local JWT development keys are absent.
+- Python 3.12+ (or 3.13)
+- An active [Aiven](https://aiven.io) account with:
+  - **Aiven for PostgreSQL** service
+  - **Aiven for Apache Kafka** service
+  - **Aiven for Caching / Redis** service (or standard Redis with TLS)
+- An SMTP account (SendGrid, Brevo, AWS SES, Mailgun, or local SMTP)
 
-### 1. Configure local environment values
+### 1. Clone & Switch to Charan Branch
 
-In PowerShell, from this repository:
+```powershell
+git clone https://github.com/DhrithiHH/Event-Driven-Account-Management-Platform--backend.git
+cd Event-Driven-Account-Management-Platform--backend
+git checkout charan
+```
+
+### 2. Create Virtual Environment & Install Dependencies
+
+Using standard `pip`:
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+```
+
+Or using `uv`:
+
+```powershell
+uv venv
+uv pip install -r requirements.txt
+```
+
+### 3. Configure Aiven Services in `.env`
+
+Copy `.env_example` to `.env`:
 
 ```powershell
 Copy-Item .env_example .env
 ```
 
-Set your own development values in `.env`; do not commit secrets. The settings file recognizes these groups:
+#### A. Aiven PostgreSQL Configuration
+In your Aiven Web Console, navigate to your **PostgreSQL** service and copy the **Service URI**:
 
-| Group | Variables |
-| --- | --- |
-| PostgreSQL | `DB_HOST`, `DB_PORT`, `DB_USERNAME`, `DB_PASSWORD`, `DB_DATABASE` |
-| Redis | `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD` |
-| Kafka | `MESSAGE_BROKER_HOST`, `MESSAGE_BROKER_PORT` |
-| SMTP | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USE_TLS`, `SMTP_SENDER`, optional `SMTP_USERNAME`, `SMTP_PASSWORD` |
-| API/server | `APP_TITLE`, `APP_VERSION`, `APP_DOCS_URL`, `APP_REDOC_URL`, `UVICORN_SERVER_HOST`, `UVICORN_SERVER_PORT` |
-| CORS | `CORS_ORIGINS`, `CORS_METHODS`, `CORS_HEADERS` |
-| Optional email validation | `EMAIL_VERIFIER_API_KEY`, `EMAIL_VERIFIER_ENABLED` |
-| JWT | `JWT_ALGORITHM`, `JWT_EXPIRATION` |
-
-For the API container, use Docker service names: `DB_HOST=postgres`, `REDIS_HOST=redis`, `MESSAGE_BROKER_HOST=kafka` with `MESSAGE_BROKER_PORT=29092`, and `SMTP_HOST=maildev`. The sample `.env_example` uses localhost values for host-run processes.
-
-The JWT service loads RS256 key files from `.certs/jwt-private.pem` and `.certs/jwt-public.pem`. If they are missing, create development-only keys, for example:
-
-```powershell
-New-Item -ItemType Directory -Force .certs
-openssl genrsa -out .certs/jwt-private.pem 2048
-openssl rsa -in .certs/jwt-private.pem -pubout -out .certs/jwt-public.pem
+```env
+DATABASE_URL=postgresql+asyncpg://avnadmin:<PASSWORD>@<HOST>:<PORT>/defaultdb?ssl=require
 ```
 
-Keep private keys out of source control and use appropriately managed keys outside local development.
+#### B. Aiven Kafka Configuration
+Download the three client certificates from your Aiven Kafka Overview page:
+- `ca.pem` (CA certificate)
+- `service.cert` (Access certificate)
+- `service.key` (Access key)
 
-### 2. Start the Docker stack and apply migrations
+Place them in `.certs/aiven/` inside this project (automatically detected) or specify their paths in `.env`:
 
-```powershell
-docker compose --profile api up --build -d
-docker compose --profile migrations run --rm migrations
-docker compose ps
+```env
+MESSAGE_BROKER_BOOTSTRAP_SERVERS=kafka-service-name.aivencloud.com:12346
+MESSAGE_BROKER_SECURITY_PROTOCOL=SSL
+MESSAGE_BROKER_SSL_CAFILE=.certs/aiven/ca.pem
+MESSAGE_BROKER_SSL_CERTFILE=.certs/aiven/service.cert
+MESSAGE_BROKER_SSL_KEYFILE=.certs/aiven/service.key
 ```
 
-The `api` profile starts PostgreSQL, Redis, Kafka, MailDev, and the FastAPI application. The migrations profile runs `alembic upgrade head`.
+*(Alternatively, if your Aiven Kafka cluster uses SASL_SSL authentication, set `MESSAGE_BROKER_SECURITY_PROTOCOL=SASL_SSL` and configure your SASL username and password.)*
 
-The API is published on `http://localhost:8080`. To follow logs:
+#### C. Aiven Redis Configuration
+Copy the **Service URI** from your Aiven Redis overview:
 
-```powershell
-docker compose logs -f api
+```env
+REDIS_URL=rediss://default:<PASSWORD>@<HOST>:<PORT>
 ```
 
-### Ports
+#### D. SMTP Configuration
+Configure your cloud or corporate SMTP credentials:
 
-| Service | Inside Docker network | Optional host forwarding |
-| --- | --- | --- |
-| FastAPI | `api:8080` | `http://localhost:8080` |
-| PostgreSQL | `postgres:5432` | `127.0.0.1:5432` with `port-forwarder` profile |
-| Redis | `redis:6379` | `127.0.0.1:6379` with `port-forwarder` profile |
-| Kafka | `kafka:29092` | `127.0.0.1:9092` with `port-forwarder` profile |
-| MailDev SMTP | `maildev:1025` | `127.0.0.1:1025` with `port-forwarder` profile |
-| MailDev web UI | `maildev:1080` | `http://127.0.0.1:1080` with `port-forwarder` profile |
-
-Start the optional forwarding containers only when needed:
-
-```powershell
-docker compose --profile api --profile port-forwarder up -d
+```env
+SMTP_HOST=smtp.sendgrid.net
+SMTP_PORT=587
+SMTP_USE_TLS=False
+SMTP_SENDER=noreply@yourdomain.com
+SMTP_USERNAME=apikey
+SMTP_PASSWORD=your-api-key
 ```
 
-### Run outside Docker
+### 4. Run Database Migrations
 
-After configuring host-reachable values and keys:
+Apply Alembic migrations directly to your Aiven PostgreSQL database:
 
 ```powershell
-uv sync --all-extras
-uv run alembic upgrade head
-uv run api
+alembic upgrade head
 ```
 
-## Testing and verified checks
+### 5. Start the Application
 
-The repository uses pytest with async support. A no-coverage local regression command is:
+Run the FastAPI API server and FastStream Kafka consumer:
+
+```powershell
+python -m fastapi_example
+```
+
+The service will start on `http://localhost:8080`.
+Interactive API documentation is accessible at:
+- **Swagger UI:** [http://localhost:8080/docs](http://localhost:8080/docs)
+- **ReDoc:** [http://localhost:8080/redoc](http://localhost:8080/redoc)
+
+---
+
+## Testing
+
+The repository uses `pytest` with async support:
 
 ```powershell
 $env:PYTHONDONTWRITEBYTECODE='1'
@@ -249,13 +273,7 @@ $env:PYTHONPATH='src'
 python -m pytest -o addopts='' -p no:cacheprovider -p no:cov
 ```
 
-At the documented working revision, the latest reported full regression result was **103 passed, 1 warning**. This is a recorded verification result, not a claim that the command has been run in every clone.
-
-Focused SMTP tests cover stale-transport reconnection, disconnected clients, and the no-resend behavior after a send-time transport error.
-
-The Docker stack was also manually verified for a successful lifecycle email, an independent MailDev restart, and a subsequent lifecycle email without restarting FastAPI. The subsequent notification reached `SENT` and appeared in MailDev. This demonstrates local transport recovery only; it is not an end-to-end delivery guarantee.
-
-## Limitations and future work
+## Limitations and Future Work
 
 - No transactional outbox, retry topic, dead-letter queue, or consumer idempotency mechanism is implemented.
 - Kafka/SMTP processing is not exactly-once and does not guarantee delivery to an inbox.
