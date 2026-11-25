@@ -274,6 +274,7 @@ class SMTPSettings(BaseSettings):
     host: str = "localhost"
     port: int = 1025
     use_tls: bool = False
+    starttls: bool = False
     sender: str = "root@localhost"
     username: Optional[str] = None
     password: Optional[str] = None

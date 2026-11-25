@@ -48,6 +48,8 @@ class EmailSender(IEmailSender):
                 self._client.close()
 
         await self._client.connect()
+        if self._settings.starttls and not getattr(self._client, "is_tls", False):
+            await self._client.starttls()
         if self._settings.username and self._settings.password:
             await self._client.login(
                 self._settings.username, self._settings.password
