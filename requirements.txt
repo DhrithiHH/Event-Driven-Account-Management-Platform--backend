@@ -22,7 +22,7 @@ cryptography>=46.0.3,<47.0.0
 redis>=7.3.0
 
 # Message Broker & Streaming (Kafka / Aiven Kafka)
-faststream[cli,kafka]>=0.6.7
+faststream[cli,kafka]>=0.6.7,<0.8.0
 
 # Communication & External APIs
 aiosmtplib>=5.1.0
