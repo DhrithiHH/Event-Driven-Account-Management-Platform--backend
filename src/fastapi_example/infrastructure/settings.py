@@ -80,7 +80,10 @@ class UvicornServerSettings(BaseSettings):
     )
 
     host: Optional[str] = "0.0.0.0"
-    port: Optional[int] = 8080
+    port: Optional[int] = Field(
+        default=8080,
+        validation_alias=AliasChoices("port", "uvicorn_server_port", "PORT"),
+    )
 
 
 class JWTSettings(BaseSettings):
