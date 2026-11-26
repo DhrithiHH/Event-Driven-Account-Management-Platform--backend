@@ -18,40 +18,47 @@ from fastapi_example.infrastructure.settings import MessageBrokerSettings
 log = logging.getLogger(__name__)
 
 
+def _find_file(path_str: Optional[str], default_filename: str) -> Optional[str]:
+    """Find certificate file across local paths, working dir, repo root, and Render /etc/secrets."""
+    if path_str and os.path.isabs(path_str) and os.path.exists(path_str):
+        return path_str
+
+    repo_root = Path(__file__).resolve().parents[4]
+    candidates: list[Path] = []
+
+    if path_str:
+        p = Path(path_str)
+        candidates.extend([
+            Path.cwd() / p,
+            repo_root / p,
+            Path("/etc/secrets") / p,
+            Path("/etc/secrets") / p.name,
+            p,
+        ])
+
+    candidates.extend([
+        repo_root / ".certs" / "aiven" / default_filename,
+        Path.cwd() / ".certs" / "aiven" / default_filename,
+        Path("/etc/secrets/.certs/aiven") / default_filename,
+        Path("/etc/secrets/aiven") / default_filename,
+        Path("/etc/secrets") / default_filename,
+    ])
+
+    for candidate in candidates:
+        if candidate.exists() and candidate.is_file():
+            log.info("Found certificate file for %s at: %s", default_filename, candidate)
+            return str(candidate.resolve())
+
+    return path_str if (path_str and os.path.exists(path_str)) else None
+
+
 def create_broker(settings: MessageBrokerSettings) -> KafkaBroker:
     bootstrap_servers = settings.url
     security_protocol = (settings.security_protocol or "PLAINTEXT").upper()
 
-    cafile = settings.ssl_cafile
-    certfile = settings.ssl_certfile
-    keyfile = settings.ssl_keyfile
-
-    # Auto-detect certs directory if not explicitly provided
-    certs_dir: Optional[Path] = None
-    if settings.certs_dir:
-        candidate = Path(settings.certs_dir)
-        if candidate.exists():
-            certs_dir = candidate
-    else:
-        # Check standard certs directories: .certs/aiven, .certs/kafka, .certs, certs
-        repo_root = Path(__file__).parents[4]
-        for candidate in [
-            repo_root / ".certs" / "aiven",
-            repo_root / ".certs" / "kafka",
-            repo_root / ".certs",
-            repo_root / "certs",
-        ]:
-            if candidate.exists() and (candidate / "ca.pem").exists():
-                certs_dir = candidate
-                break
-
-    if certs_dir:
-        if not cafile and (certs_dir / "ca.pem").exists():
-            cafile = str(certs_dir / "ca.pem")
-        if not certfile and (certs_dir / "service.cert").exists():
-            certfile = str(certs_dir / "service.cert")
-        if not keyfile and (certs_dir / "service.key").exists():
-            keyfile = str(certs_dir / "service.key")
+    cafile = _find_file(settings.ssl_cafile, "ca.pem")
+    certfile = _find_file(settings.ssl_certfile, "service.cert")
+    keyfile = _find_file(settings.ssl_keyfile, "service.key")
 
     # If raw PEM certificate content is provided via env vars, write to temporary files
     if settings.ssl_ca_data and not cafile:

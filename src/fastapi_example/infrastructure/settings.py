@@ -238,10 +238,16 @@ class MessageBrokerSettings(BaseSettings):
     )
     host: Optional[str] = "localhost"
     port: Optional[int] = 9092
+    bootstrap_servers: Optional[str] = None
     custom_url: Optional[str] = Field(
         default=None,
         validation_alias=AliasChoices(
-            "url", "custom_url", "bootstrap_servers", "broker_url"
+            "MESSAGE_BROKER_BOOTSTRAP_SERVERS",
+            "MESSAGE_BROKER_URL",
+            "KAFKA_BOOTSTRAP_SERVERS",
+            "KAFKA_URL",
+            "url",
+            "bootstrap_servers",
         ),
     )
     security_protocol: str = "PLAINTEXT"
@@ -259,12 +265,15 @@ class MessageBrokerSettings(BaseSettings):
 
     @property
     def url(self) -> str:
-        if self.custom_url:
-            return self.custom_url
-        env_bootstrap = os.getenv("KAFKA_BOOTSTRAP_SERVERS") or os.getenv("KAFKA_URL")
-        if env_bootstrap:
-            return env_bootstrap
-        return f"{self.host or 'localhost'}:{self.port or 9092}"
+        return (
+            self.bootstrap_servers
+            or self.custom_url
+            or os.getenv("MESSAGE_BROKER_BOOTSTRAP_SERVERS")
+            or os.getenv("MESSAGE_BROKER_URL")
+            or os.getenv("KAFKA_BOOTSTRAP_SERVERS")
+            or os.getenv("KAFKA_URL")
+            or f"{self.host or 'localhost'}:{self.port or 9092}"
+        )
 
 
 class SMTPSettings(BaseSettings):
