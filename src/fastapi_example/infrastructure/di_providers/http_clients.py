@@ -19,7 +19,11 @@ class HTTPClientsProvider(Provider):
 
     @provide(scope=Scope.APP)
     async def email_verifier(self) -> AsyncIterator[IEmailVerifier]:
-        if not self._email_verifier_settings.enabled:
+        if (
+            not self._email_verifier_settings.enabled
+            or not self._email_verifier_settings.api_key
+            or not self._email_verifier_settings.api_key.strip()
+        ):
             yield NullEmailVerifier()
             return
 

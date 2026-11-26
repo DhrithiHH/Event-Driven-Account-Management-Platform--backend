@@ -2,7 +2,7 @@ import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -213,9 +213,63 @@ class CORSSettings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env", env_file_encoding="utf-8", env_prefix="CORS_", extra="ignore"
     )
-    methods: list[str] = ["*"]
-    headers: list[str] = ["*"]
-    origins: list[str] = ["*"]
+    methods: Any = ["*"]
+    headers: Any = ["*"]
+    origins: Any = ["*"]
+
+    @property
+    def parsed_origins(self) -> list[str]:
+        v = self.origins
+        if isinstance(v, list):
+            return [str(x).strip() for x in v if str(x).strip()]
+        if isinstance(v, str):
+            v = v.strip()
+            if v.startswith("[") and v.endswith("]"):
+                import json
+                try:
+                    loaded = json.loads(v)
+                    if isinstance(loaded, list):
+                        return [str(x).strip() for x in loaded if str(x).strip()]
+                except Exception:
+                    pass
+            return [x.strip().strip("'").strip('"') for x in v.split(",") if x.strip()]
+        return ["*"]
+
+    @property
+    def parsed_methods(self) -> list[str]:
+        v = self.methods
+        if isinstance(v, list):
+            return [str(x).strip() for x in v]
+        if isinstance(v, str):
+            v = v.strip()
+            if v.startswith("[") and v.endswith("]"):
+                import json
+                try:
+                    loaded = json.loads(v)
+                    if isinstance(loaded, list):
+                        return [str(x).strip() for x in loaded]
+                except Exception:
+                    pass
+            return [x.strip().strip("'").strip('"') for x in v.split(",") if x.strip()]
+        return ["*"]
+
+    @property
+    def parsed_headers(self) -> list[str]:
+        v = self.headers
+        if isinstance(v, list):
+            return [str(x).strip() for x in v]
+        if isinstance(v, str):
+            v = v.strip()
+            if v.startswith("[") and v.endswith("]"):
+                import json
+                try:
+                    loaded = json.loads(v)
+                    if isinstance(loaded, list):
+                        return [str(x).strip() for x in loaded]
+                except Exception:
+                    pass
+            return [x.strip().strip("'").strip('"') for x in v.split(",") if x.strip()]
+        return ["*"]
 
 
 class EmailVerifierSettings(BaseSettings):
