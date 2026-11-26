@@ -19,12 +19,11 @@ class CommunicationProvider(Provider):
     @provide(scope=Scope.APP)
     async def smtp_client(self) -> AsyncGenerator[aiosmtplib.SMTP, Any]:
         client = create_smtp_client(self._smtp_settings)
-        async with client:
-            if self._smtp_settings.username and self._smtp_settings.password:
-                await client.login(
-                    self._smtp_settings.username, self._smtp_settings.password
-                )
+        try:
             yield client
+        finally:
+            if client.is_connected:
+                client.close()
 
     @provide(scope=Scope.APP)
     def email_sender(self, client: aiosmtplib.SMTP) -> IEmailSender:
