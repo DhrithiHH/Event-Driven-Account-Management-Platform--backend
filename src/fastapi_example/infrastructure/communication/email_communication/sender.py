@@ -30,7 +30,17 @@ class EmailSender(IEmailSender):
         async with self._send_lock:
             await self._ensure_connection()
             try:
-                return await self._client.send_message(message)
+                refused, response = await self._client.send_message(message)
+                if refused:
+                    raise aiosmtplib.SMTPRecipientsRefused(
+                        [
+                            aiosmtplib.SMTPRecipientRefused(
+                                result.code, result.message, recipient
+                            )
+                            for recipient, result in refused.items()
+                        ]
+                    )
+                return refused, response
             except _CONNECTION_ERRORS:
                 # The message may have reached the SMTP server before the
                 # transport error, so do not retry it. Reset the client for

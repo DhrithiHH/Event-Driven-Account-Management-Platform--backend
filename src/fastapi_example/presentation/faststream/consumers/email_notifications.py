@@ -35,7 +35,7 @@ async def email_notifications(
         await repository.update_status(data.event_id, NotificationEventStatus.PROCESSING)
 
     try:
-        await service.send(data)
+        _, smtp_response = await service.send(data)
     except Exception:
         log.exception("Email delivery failed for notification event: %s", data.event_id)
         async with transaction_manager:
@@ -44,6 +44,11 @@ async def email_notifications(
             )
         return
 
+    log.info(
+        "SMTP server accepted notification event %s: %s",
+        data.event_id,
+        smtp_response,
+    )
     async with transaction_manager:
         await repository.update_status(
             data.event_id, NotificationEventStatus.SENT, processed=True

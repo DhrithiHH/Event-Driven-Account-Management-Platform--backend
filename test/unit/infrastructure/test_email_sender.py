@@ -103,3 +103,22 @@ async def test_sender_resets_transport_without_retrying_a_failed_send() -> None:
     client.send_message.assert_awaited_once()
     client.close.assert_called_once()
     client.connect.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_sender_raises_when_smtp_refuses_a_recipient() -> None:
+    client = MagicMock()
+    client.is_connected = True
+    client.noop = AsyncMock(return_value=None)
+    refused_response = MagicMock()
+    refused_response.code = 550
+    refused_response.message = "Mailbox unavailable"
+    client.send_message = AsyncMock(
+        return_value=({"user@example.com": refused_response}, "rejected")
+    )
+    sender = make_sender(client)
+
+    with pytest.raises(aiosmtplib.SMTPRecipientsRefused) as exc_info:
+        await sender.send_email(make_message())
+
+    assert exc_info.value.recipients[0].recipient == "user@example.com"
