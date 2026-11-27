@@ -1,10 +1,13 @@
 from email.message import EmailMessage
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, Mock
 
 import aiosmtplib
 import pytest
 
 from fastapi_example.infrastructure.communication.email_communication import EmailSender
+from fastapi_example.infrastructure.communication.email_communication.client import (
+    create_smtp_client,
+)
 from fastapi_example.infrastructure.settings import SMTPSettings
 
 
@@ -25,6 +28,24 @@ def make_message() -> EmailMessage:
     message["To"] = "user@example.com"
     message.set_content("Test message")
     return message
+
+
+def test_smtp_client_configures_starttls(monkeypatch: pytest.MonkeyPatch) -> None:
+    smtp_factory = Mock()
+    monkeypatch.setattr(
+        "fastapi_example.infrastructure.communication.email_communication.client.aiosmtplib.SMTP",
+        smtp_factory,
+    )
+    settings = SMTPSettings(host="smtp-relay.brevo.com", port=2525, starttls=True)
+
+    create_smtp_client(settings)
+
+    smtp_factory.assert_called_once_with(
+        hostname="smtp-relay.brevo.com",
+        port=2525,
+        use_tls=False,
+        start_tls=True,
+    )
 
 
 @pytest.mark.asyncio

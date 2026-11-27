@@ -229,16 +229,22 @@ REDIS_URL=rediss://default:<PASSWORD>@<HOST>:<PORT>
 ```
 
 #### D. SMTP Configuration
-Configure your cloud or corporate SMTP credentials:
+Configure your Brevo SMTP credentials. For Render deployments, use port `2525`
+instead of the commonly blocked SMTP ports `25`, `465`, and `587`.
 
 ```env
-SMTP_HOST=smtp.sendgrid.net
-SMTP_PORT=587
+SMTP_HOST=smtp-relay.brevo.com
+SMTP_PORT=2525
 SMTP_USE_TLS=False
+SMTP_STARTTLS=True
 SMTP_SENDER=noreply@yourdomain.com
-SMTP_USERNAME=apikey
-SMTP_PASSWORD=your-api-key
+SMTP_USERNAME=your-brevo-login
+SMTP_PASSWORD=your-brevo-smtp-key
 ```
+
+Use the SMTP key from Brevo (not its API key) and a verified sender address.
+Set these variables in the Render service's **Environment** settings as well as
+in local `.env`, then redeploy.
 
 ### 4. Run Database Migrations
 
