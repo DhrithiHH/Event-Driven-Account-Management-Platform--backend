@@ -55,7 +55,10 @@ async def test_sender_reconnects_stale_transport_before_sending() -> None:
     client.noop = AsyncMock(
         side_effect=aiosmtplib.SMTPServerDisconnected("Server not connected")
     )
-    client.connect = AsyncMock()
+    client.close.side_effect = lambda: setattr(client, "is_connected", False)
+    client.connect = AsyncMock(
+        side_effect=lambda: setattr(client, "is_connected", True)
+    )
     client.login = AsyncMock()
     client.send_message = AsyncMock(return_value=({}, "queued"))
     sender = make_sender(client)
@@ -88,10 +91,28 @@ async def test_sender_connects_before_sending_when_transport_is_disconnected() -
 
 
 @pytest.mark.asyncio
+async def test_sender_authenticates_connected_transport_once() -> None:
+    client = MagicMock()
+    client.is_connected = True
+    client.noop = AsyncMock(return_value=None)
+    client.login = AsyncMock()
+    client.send_message = AsyncMock(return_value=({}, "queued"))
+    sender = make_sender(client)
+
+    await sender.send_email(make_message())
+    await sender.send_email(make_message())
+
+    assert client.noop.await_count == 2
+    client.login.assert_awaited_once_with("smtp-user", "smtp-password")
+    assert client.send_message.await_count == 2
+
+
+@pytest.mark.asyncio
 async def test_sender_resets_transport_without_retrying_a_failed_send() -> None:
     client = MagicMock()
     client.is_connected = True
     client.noop = AsyncMock(return_value=None)
+    client.login = AsyncMock()
     client.send_message = AsyncMock(
         side_effect=aiosmtplib.SMTPServerDisconnected("Server not connected")
     )
@@ -110,6 +131,7 @@ async def test_sender_raises_when_smtp_refuses_a_recipient() -> None:
     client = MagicMock()
     client.is_connected = True
     client.noop = AsyncMock(return_value=None)
+    client.login = AsyncMock()
     refused_response = MagicMock()
     refused_response.code = 550
     refused_response.message = "Mailbox unavailable"
